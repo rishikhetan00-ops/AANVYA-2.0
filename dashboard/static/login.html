@@ -187,8 +187,9 @@
     inp.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
 
     async function doLogin() {
-      const key = inp.value.trim();
+      const key = inp.value.trim().toUpperCase();
       if (key.length < 6) { shake(); return; }
+      document.getElementById('err').textContent = 'Authenticating...';
       let data;
       try {
         const r = await fetch('/login', {
@@ -198,17 +199,18 @@
         });
         data = await r.json();
       } catch (e) {
-        document.getElementById('err').textContent = 'Connection error';
+        console.error("Login fetch error:", e);
+        document.getElementById('err').textContent = 'Connection error: ' + (e.message || 'Network offline');
         shake(); return;
       }
-      if (data.ok && data.token) {
+      if (data && data.ok && data.token) {
         sessionStorage.setItem('jarvis_key', key);
         sessionStorage.setItem('jarvis_token', data.token);
         location.href = '/';
       } else {
         inp.value = '';
         inp.focus();
-        document.getElementById('err').textContent = 'Invalid or expired key';
+        document.getElementById('err').textContent = (data && data.error) ? data.error : 'Invalid or expired key';
         shake();
       }
     }
