@@ -1,11 +1,12 @@
 """
-plugins/hermes_worker.py — Autonomous Background Agent for AANVYA.
-
-Powered by Nous Research Hermes Agent concepts:
+plugins/hermes_worker.py — Autonomous Background Agent for Laptop AANVYA
+========================================================================
+Powered by Nous Research Hermes Agent concepts & Cloud-Synced Architecture:
 - Multi-step autonomous planning & tool execution
 - Background threading (never freezes the live voice session)
-- Built-in web search, code writing, file generation & self-healing
-- Desktop deliverable exports & voice completion notification
+- Built-in web search, code writing, FLUX.1 image generation & file deliverables
+- Direct export to Desktop/Hermes_Output/ & voice completion announcement
+- Shared activity recording with Cloud VPS
 """
 
 import json
@@ -14,7 +15,9 @@ import os
 import re
 import threading
 import time
+import requests
 from pathlib import Path
+from typing import Optional
 
 from core import gemini
 from memory.config_manager import get_plugin_config
@@ -41,10 +44,10 @@ PLUGIN = {
     "name": "hermes_worker",
     "description": (
         "Dispatches an autonomous multi-step background worker (Hermes Agent) to perform "
-        "complex deep research, software building, file generation, or web data extraction. "
-        "Call this whenever the user wants a full task done in the background without waiting, "
-        "such as 'build an app for...', 'research in depth and write a report on...', "
-        "'scrape and compile data for...', 'write a complete project on my desktop...'."
+        "complex deep research, software building, file generation, photorealistic image creation, "
+        "or web data extraction. Call this whenever the user wants a full task done in the background "
+        "without waiting, such as 'build an app for...', 'research in depth and write a report on...', "
+        "'generate an image for...', 'scrape and compile data for...', 'write a complete project on my desktop...'."
     ),
     "parameters": {
         "type": "OBJECT",
@@ -55,7 +58,7 @@ PLUGIN = {
             },
             "output_format": {
                 "type": "STRING",
-                "description": "Optional desired deliverable type (e.g. 'markdown_report', 'python_project', 'excel_data', 'code_files')"
+                "description": "Optional desired deliverable type (e.g. 'markdown_report', 'python_project', 'flux_image', 'excel_data', 'code_files')"
             }
         },
         "required": ["task"],
@@ -89,6 +92,21 @@ def _web_search(query: str) -> str:
     except Exception as e:
         return f"Search error: {e}"
 
+def _generate_flux_image(out_dir: Path, prompt: str) -> str:
+    """Generates a FLUX.1 photorealistic image and saves it to deliverables."""
+    try:
+        clean_p = re.sub(r"[^\w\s,-]", "", prompt).strip()
+        encoded = requests.utils.quote(clean_p)
+        url = f"https://image.pollinations.ai/prompt/{encoded}?model=flux&width=1024&height=1024&nologo=true&seed={int(time.time())}"
+        out_file = out_dir / f"Hermes_Image_{int(time.time())}.jpg"
+        r = requests.get(url, timeout=35)
+        if r.status_code == 200 and len(r.content) > 5000:
+            out_file.write_bytes(r.content)
+            return f"Successfully generated FLUX image: {out_file.name} ({len(r.content)} bytes)"
+    except Exception as e:
+        return f"Image generation error: {e}"
+    return "Failed to generate image."
+
 def _write_file(out_dir: Path, rel_path: str, content: str) -> str:
     """Safely write a deliverable file to the project output folder."""
     try:
@@ -121,11 +139,12 @@ You execute real-world tasks step-by-step using tools until the mission is 100% 
 Available Tool Calls:
 1. SEARCH: <query> (Search the live web for facts, documentation, or data)
 2. WRITE_FILE: <filename> ||| <content> (Write code, markdown reports, or data files)
-3. FINISH: <summary of what you created and where it is saved>
+3. IMAGE: <prompt> (Generate a photorealistic FLUX.1 image deliverable)
+4. FINISH: <summary of what you created and where it is saved>
 
 Format each turn as:
 THOUGHT: <your step-by-step reasoning>
-ACTION: <one of SEARCH, WRITE_FILE, or FINISH>
+ACTION: <one of SEARCH, WRITE_FILE, IMAGE, or FINISH>
 
 When all deliverables are created and written, return ACTION: FINISH.
 """
@@ -145,13 +164,30 @@ When all deliverables are created and written, return ACTION: FINISH.
                     try:
                         player.write_log(f"HERMES: Mission Completed! {summary[:80]}")
                         if notify:
-                            # Speak via the mid-task voice channel
                             say_fn = getattr(player, "request_say", None)
                             if callable(say_fn):
                                 say_fn("Sir, Hermes has completed your background mission and saved the files to your desktop.")
                     except Exception:
                         pass
+                
+                # Record to shared activity ledger
+                try:
+                    from core.cloud_sync import record_activity
+                    record_activity("hermes_mission", f"Hermes: {task[:50]}", summary, source="desktop_laptop")
+                except Exception:
+                    pass
                 return
+
+            # Parse IMAGE action
+            if "IMAGE:" in resp_text:
+                match = re.search(r"IMAGE:\s*(.+)", resp_text)
+                if match:
+                    img_prompt = match.group(1).split("\n")[0].strip()
+                    res = _generate_flux_image(out_dir, img_prompt)
+                    history.append(f"HERMES_STEP_{step}: Generated image for '{img_prompt}'\nTOOL_RESULT: {res}")
+                    if player:
+                        player.write_log(f"HERMES: Rendered image for '{img_prompt[:30]}'")
+                    continue
 
             # Parse WRITE_FILE action
             if "WRITE_FILE:" in resp_text:
@@ -159,7 +195,6 @@ When all deliverables are created and written, return ACTION: FINISH.
                 if match:
                     fname = match.group(1).strip()
                     content = match.group(2).strip()
-                    # Clean markdown code fences if wrapped
                     content = re.sub(r"^```[a-zA-Z]*\n?", "", content)
                     content = re.sub(r"\n?```$", "", content)
                     res = _write_file(out_dir, fname, content)
@@ -179,9 +214,9 @@ When all deliverables are created and written, return ACTION: FINISH.
                         player.write_log(f"HERMES: Researched '{q[:40]}'")
                     continue
 
-            # Fallback: if model provided text without strict action format, save as report
+            # Fallback: save as markdown report if free text
             if step == max_steps or len(resp_text) > 200:
-                _write_file(out_dir, "Hermes_Mission_Report.md", resp_text)
+                _write_file(out_dir, f"Hermes_Mission_Report_{int(time.time())}.md", resp_text)
                 history.append(f"HERMES_STEP_{step}: Saved mission report.")
                 break
 
@@ -192,9 +227,15 @@ When all deliverables are created and written, return ACTION: FINISH.
                 if notify:
                     say_fn = getattr(player, "request_say", None)
                     if callable(say_fn):
-                        say_fn("Sir, Hermes has completed the mission and created your deliverables.")
+                        say_fn("Sir, Hermes has completed the mission and created your deliverables on your desktop.")
             except Exception:
                 pass
+
+        try:
+            from core.cloud_sync import record_activity
+            record_activity("hermes_mission", f"Hermes: {task[:50]}", "Completed mission and saved deliverables to Desktop/Hermes_Output", source="desktop_laptop")
+        except Exception:
+            pass
 
     except Exception as e:
         logger.error(f"[Hermes] Mission failure: {e}")
@@ -205,8 +246,8 @@ When all deliverables are created and written, return ACTION: FINISH.
 
 def run(parameters: dict, player=None, session_memory=None) -> str:
     """
-    Dispatches Hermes Agent in a dedicated background worker thread.
-    Returns immediate spoken confirmation so the user never experiences lag.
+    Dispatches Hermes Agent in a dedicated background worker thread on Laptop.
+    Returns immediate spoken confirmation so voice chat never lags.
     """
     task = parameters.get("task", "").strip()
     fmt = parameters.get("output_format", "").strip()
