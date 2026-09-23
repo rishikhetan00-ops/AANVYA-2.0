@@ -349,17 +349,21 @@ def hermes_web_search(query: str, num_results: int = 4) -> str:
     return "No search results found."
 
 def run_hermes_mission(task: str, chat_id: int, bot_token: str):
-    """Executes a multi-step autonomous agent mission in the background."""
-    send_telegram_text(bot_token, chat_id, f"🚀 *Hermes Autonomous Agent Dispatched*\n\n*Mission:* {task}\n_Working in background..._")
+    """Executes a multi-step autonomous agent mission with terminal execution in the background."""
+    send_telegram_text(bot_token, chat_id, f"🚀 *Hermes Autonomous Agent Dispatched*\n\n*Mission:* {task}\n_Executing with live Linux terminal & web search..._")
     
     system_prompt = (
-        "You are Hermes, an elite autonomous research, coding & business execution agent working for AANVYA.\n"
-        "Your mission is to independently investigate, plan, search, write deliverables, or create code/images for the user.\n"
-        "Available actions in your response:\n"
-        "1. `SEARCH: <query>` — To perform live web research\n"
-        "2. `WRITE_FILE: <filename>|||<content>` — To save reports, code, landing pages, or data\n"
-        "3. `IMAGE: <prompt>` — To generate a photorealistic visual asset\n"
-        "4. `ACTION: FINISH <summary>` — When your mission is completely achieved."
+        "You are Hermes, an elite autonomous software engineer, researcher & business operator working for AANVYA.\n"
+        "You have full access to a live Linux VPS terminal and tools to independently execute missions.\n\n"
+        "Available Actions (choose ONE per step):\n"
+        "1. `BASH: <linux command>` — Execute terminal commands, run python scripts, pip install libraries, test code\n"
+        "2. `SEARCH: <query>` — Search live web for data, news, docs, pricing\n"
+        "3. `WRITE_FILE: <filename>|||<content>` — Write code, scripts, HTML/CSS landing pages, or reports\n"
+        "4. `IMAGE: <prompt>` — Generate photorealistic FLUX.1 image\n"
+        "5. `ACTION: FINISH <summary>` — When your mission is 100% complete and deliverables are ready.\n\n"
+        "Format:\n"
+        "THOUGHT: <your reasoning>\n"
+        "ACTION: <action string>"
     )
     
     history = [f"MISSION: {task}"]
@@ -376,6 +380,23 @@ def run_hermes_mission(task: str, chat_id: int, bot_token: str):
             record_shared_activity("hermes_mission", f"Hermes: {task[:50]}", summary, files=[p.name for p in deliverables])
             return
         
+        if "BASH:" in resp:
+            m = re.search(r"BASH:\s*(.+)", resp, re.DOTALL)
+            if m:
+                cmd = m.group(1).split("\n")[0].strip()
+                import subprocess
+                try:
+                    p = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60, cwd=str(DELIVERABLES_PATH))
+                    out = (p.stdout + "\n" + p.stderr).strip()
+                    if not out:
+                        out = f"(Command completed with exit code {p.returncode})"
+                    history.append(f"STEP_{step}: Executed bash '{cmd}'\nTERMINAL_OUTPUT:\n{out[:1500]}")
+                    send_telegram_text(bot_token, chat_id, f"⚙️ *Hermes Ran Terminal Command:*\n`{cmd[:100]}`\n```\n{out[:400]}\n```")
+                    continue
+                except Exception as e:
+                    history.append(f"STEP_{step}: Bash error: {e}")
+                    continue
+
         if "IMAGE:" in resp:
             m = re.search(r"IMAGE:\s*(.+)", resp)
             if m:

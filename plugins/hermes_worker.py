@@ -230,10 +230,11 @@ def _run_hermes_mission(task: str, output_format: str, player, out_dir: Path, ma
 You execute real-world tasks step-by-step using tools until the mission is 100% complete.
 
 Available Tool Calls:
-1. SEARCH: <query> (Search the live web for facts, documentation, or data)
-2. WRITE_FILE: <filename> ||| <content> (Write code, markdown reports, or data files)
-3. IMAGE: <prompt> (Generate a photorealistic FLUX.1 image deliverable)
-4. FINISH: <summary of what you created and where it is saved>
+1. BASH: <shell command> (Run python scripts, terminal commands, test code)
+2. SEARCH: <query> (Search the live web for facts, documentation, or data)
+3. WRITE_FILE: <filename> ||| <content> (Write code, markdown reports, or data files)
+4. IMAGE: <prompt> (Generate a photorealistic FLUX.1 image deliverable)
+5. FINISH: <summary of what you created and where it is saved>
 
 Format each turn as:
 THOUGHT: <your step-by-step reasoning>
@@ -272,6 +273,23 @@ When all deliverables are created and written, return ACTION: FINISH.
                 except Exception:
                     pass
                 return
+
+            # Parse BASH action
+            if "BASH:" in resp_text:
+                match = re.search(r"BASH:\s*(.+)", resp_text)
+                if match:
+                    cmd = match.group(1).split("\n")[0].strip()
+                    import subprocess
+                    try:
+                        p = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=45, cwd=str(out_dir))
+                        out = (p.stdout + "\n" + p.stderr).strip() or f"(Exit {p.returncode})"
+                        history.append(f"HERMES_STEP_{step}: Ran '{cmd}'\nOUTPUT:\n{out[:1200]}")
+                        if player:
+                            player.write_log(f"HERMES: Executed `{cmd[:40]}`")
+                        continue
+                    except Exception as e:
+                        history.append(f"HERMES_STEP_{step}: Error executing bash: {e}")
+                        continue
 
             # Parse IMAGE action
             if "IMAGE:" in resp_text:
