@@ -143,12 +143,13 @@ def _generate_flux_image(out_dir: Path, prompt: str, filename_override: str = No
         if r.status_code == 200 and len(r.content) > 5000:
             out_file.write_bytes(r.content)
             
-            # Also place a direct copy on the Desktop for instant user visibility
-            desktop_copy = Path.home() / "Desktop" / fname
-            try:
-                shutil.copy2(out_file, desktop_copy)
-            except Exception:
-                pass
+            # Only save directly to Desktop root if explicitly requested in prompt
+            if "save to desktop" in prompt.lower() or "on my desktop" in prompt.lower() and "hermes_output" not in prompt.lower():
+                desktop_copy = Path.home() / "Desktop" / fname
+                try:
+                    shutil.copy2(out_file, desktop_copy)
+                except Exception:
+                    pass
                 
             # Forward directly to Telegram
             _send_file_to_telegram(out_file, caption=f"🎨 *Generated Image for Rishi:*\n_{clean_p}_")
