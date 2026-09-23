@@ -77,26 +77,38 @@ def _send_file_to_telegram(file_path: Path, caption: str = ""):
     try:
         cfg_path = Path(__file__).resolve().parent.parent / "config" / "api_keys.json"
         if not cfg_path.exists():
+            logger.warning(f"Config path {cfg_path} does not exist.")
             return
         cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-        token = cfg.get("telegram_bot_token")
-        chats = cfg.get("telegram_allowed_chat_ids", [])
-        if not token or not chats:
+        token = cfg.get("telegram_bot_token") or cfg.get("plugin_config", {}).get("telegram_remote", {}).get("bot_token")
+        
+        # Robustly resolve chat IDs from all possible config fields
+        raw_chats = cfg.get("telegram_allowed_chat_ids") or cfg.get("plugin_config", {}).get("telegram_remote", {}).get("allowed_chat_ids") or []
+        chat_ids = []
+        if isinstance(raw_chats, int):
+            chat_ids = [raw_chats]
+        elif isinstance(raw_chats, str):
+            chat_ids = [int(x.strip()) for x in raw_chats.split(",") if x.strip().isdigit()]
+        elif isinstance(raw_chats, list):
+            chat_ids = [int(x) for x in raw_chats if str(x).isdigit()]
+
+        if not token or not chat_ids:
+            logger.warning(f"Cannot forward to Telegram: token={bool(token)}, chat_ids={chat_ids}")
             return
 
         is_image = file_path.suffix.lower() in [".jpg", ".jpeg", ".png", ".webp"]
         endpoint = "sendPhoto" if is_image else "sendDocument"
         field_name = "photo" if is_image else "document"
 
-        for cid in chats:
+        for cid in chat_ids:
             with open(file_path, "rb") as f:
-                requests.post(
+                r = requests.post(
                     f"https://api.telegram.org/bot{token}/{endpoint}",
                     data={"chat_id": cid, "caption": caption[:1024], "parse_mode": "Markdown"},
                     files={field_name: f},
                     timeout=25
                 )
-        logger.info(f"Forwarded deliverable {file_path.name} to Telegram successfully.")
+                logger.info(f"Telegram dispatch status for {file_path.name}: {r.status_code}")
     except Exception as e:
         logger.error(f"Failed to send deliverable to Telegram: {e}")
 
