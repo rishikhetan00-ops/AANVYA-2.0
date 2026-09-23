@@ -321,44 +321,48 @@ def hermes_web_search(query: str) -> str:
     return "Search failed."
 
 def run_hermes_mission(task: str, chat_id: int, bot_token: str):
-    """Executes a multi-step autonomous agent mission with terminal execution in the background."""
+    """Executes a multi-step autonomous agent mission with clean single-file delivery."""
     send_telegram_text(bot_token, chat_id, f"🚀 *Hermes Autonomous Agent Dispatched*\n\n*Mission:* {task}\n_Executing with live Linux terminal & web search..._")
     
     system_prompt = """You are Hermes, an elite autonomous software engineer, researcher & 21st.dev design master working for AANVYA.
 You have full access to a live Linux VPS terminal and tools to independently execute missions.
 
 CRITICAL LAWS FOR WEBSITES & DELIVERABLES:
-1. 📱 FULL MOBILE RESPONSIVENESS & TOUCH OPTIMIZATION:
-   • Every page must be flawlessly responsive on all viewports (Mobile: 375px–430px, Tablet: 768px, Desktop: 1200px+).
+1. 🚀 DIRECT IMMEDIATE ACTION (ZERO SPECULATIVE PLANNING):
+   • When asked to build a website, landing page, app, or tool, DO NOT waste time creating planning documents, spec outlines, or markdown brainstorms.
+   • IMMEDIATELY generate the complete, working, production code in your very first step via `WRITE_FILE: index.html ||| <full complete code>`.
+
+2. 📱 FULL MOBILE RESPONSIVENESS & TOUCH OPTIMIZATION:
+   • Every page must be flawlessly responsive on Mobile (375px–430px), Tablet (768px), and Desktop (1200px+).
    • Responsive Typography: Use fluid scaling (`text-4xl sm:text-6xl md:text-8xl lg:text-9xl`) or `clamp()`.
    • Responsive Grid: Use `grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 md:gap-8`.
    • Mobile Navigation: Include a working mobile hamburger toggle with backdrop blur overlay.
    • Touch Targets: All interactive buttons and inputs must have `min-height: 44px` with proper padding.
    • Always include `<meta name="viewport" content="width=device-width, initial-scale=1.0">` and `overflow-x-hidden` on body.
 
-2. 🚫 ZERO JSX IN RAW HTML (PURE STATIC HTML LAW):
+3. 🚫 ZERO JSX IN RAW HTML (PURE STATIC HTML LAW):
    • NEVER write React/JSX syntax inside `.html` files (e.g. NEVER do `{[ {img:...} ].map(...)}` in HTML body).
-   • Write clean, complete, static semantic HTML tags or dynamically inject elements using a real `<script>` DOM loop.
+   • Write clean, complete, static semantic HTML tags.
 
-3. ⚡ ZERO DEAD JAVASCRIPT / ZERO PLACEHOLDER SCRIPTS:
+4. ⚡ ZERO DEAD JAVASCRIPT / ZERO PLACEHOLDER SCRIPTS:
    • NEVER write comments like `// GSAP animations would be initialized here`.
    • Every imported library (Three.js, GSAP, Lucide, Canvas) MUST have complete, working, interactive JavaScript code.
    • Always call `lucide.createIcons()` on page load.
    • Implement active cursor spotlight physics (`--mouse-x`, `--mouse-y`) or smooth 3D tilt calculations.
 
-4. 🚫 ZERO PLACEHOLDER BOXES:
+5. 🚫 ZERO PLACEHOLDER BOXES:
    • NEVER use empty gray rectangles (`bg-zinc-800`, `bg-gray-800`).
    • ALWAYS embed real, high-resolution Unsplash photography with `auto=format&fit=crop&w=1200&q=80`.
 
-5. 🎨 AUTONOMOUS 21st.dev COMPONENT & THEME CATALOG:
-   • Glyph Portal Theme: Oversized typography hero that opens/steps into full-bleed project case studies on scroll (using SVG clip-path, canvas font scanning, or GSAP ScrollTrigger).
-   • 3D Spotlight Bento Theme: Dark glassmorphic bento cards with cursor-following radial spotlight reflections and 3D layer pop-outs (`transform-style: preserve-3d; translateZ(35px)`).
+6. 🎨 21st.dev THEME TAXONOMY:
+   • Glyph Portal: Scroll-driven typography hero that opens/steps into full-bleed project case studies on scroll (using SVG clip-path / canvas / GSAP ScrollTrigger).
+   • 3D Spotlight Bento: Dark glassmorphic bento cards with cursor-following radial spotlight reflections and 3D layer pop-outs (`transform-style: preserve-3d; translateZ(35px)`).
    • Three.js Interactive Hero: Orbiting particle starfields, rotating wireframe monoliths, or geometric meshes that respond to mouse move.
    • Editorial Parallax: Rich photography cards with category filtering, floating badges, and smooth inquiry drawers.
 
-6. 📦 DELIVERABLE FORMAT:
-   • For single-file sites, ALWAYS create a COMPLETE, 250+ LINE, 100% SELF-CONTAINED `index.html` with Tailwind CDN, Google Fonts, Lucide icons, Three.js, and GSAP.
-   • Always output via `WRITE_FILE: index.html ||| <full complete html>`.
+7. 📦 DELIVERABLE FORMAT:
+   • For websites, ALWAYS create a COMPLETE, 250+ LINE, 100% SELF-CONTAINED `index.html` with Tailwind CDN, Google Fonts, Lucide icons, Three.js, and GSAP.
+   • Output via `WRITE_FILE: index.html ||| <full complete html>`.
 
 Available Actions (choose ONE per step):
 1. `BASH: <linux command>` — Execute terminal commands, run python scripts, pip install libraries, test code
@@ -384,10 +388,11 @@ ACTION: <action string>"""
             send_telegram_text(bot_token, chat_id, f"✅ *Hermes Mission Completed!*\n\n{summary}")
             record_shared_activity("hermes_mission", f"Hermes: {task[:50]}", summary, files=[p.name for p in deliverables])
             
-            # Ensure all created deliverables are directly sent to Telegram as documents
-            for df in deliverables:
-                if df.exists():
-                    send_telegram_document(bot_token, chat_id, df, caption=f"📁 *Hermes Deliverable:* `{df.name}`")
+            # Send ONLY the single final deliverable file (e.g. index.html), NO spam
+            if deliverables:
+                primary = next((f for f in reversed(deliverables) if f.name.endswith(".html")), deliverables[-1])
+                if primary.exists():
+                    send_telegram_document(bot_token, chat_id, primary, caption=f"📁 *Final Deliverable:* `{primary.name}`")
             return
         
         if "BASH:" in resp:
@@ -426,12 +431,10 @@ ACTION: <action string>"""
                 content = re.sub(r"\n?```$", "", content)
                 fpath = DELIVERABLES_PATH / fname
                 fpath.write_text(content, encoding="utf-8")
-                deliverables.append(fpath)
+                if fpath not in deliverables:
+                    deliverables.append(fpath)
                 history.append(f"STEP_{step}: Wrote {fname}")
-                
-                # Immediately send deliverable file as Telegram document attachment!
-                send_telegram_text(bot_token, chat_id, f"📝 *Hermes Created Deliverable:* `{fname}`")
-                send_telegram_document(bot_token, chat_id, fpath, caption=f"📁 *Hermes Deliverable File:* `{fname}`")
+                send_telegram_text(bot_token, chat_id, f"📝 *Hermes Progress:* Generated `{fname}`")
                 continue
                 
         if "SEARCH:" in resp:
@@ -443,11 +446,17 @@ ACTION: <action string>"""
                 continue
                 
         if step == max_steps or len(resp) > 200:
-            report_path = DELIVERABLES_PATH / f"Hermes_Report_{int(time.time())}.md"
-            report_path.write_text(resp, encoding="utf-8")
-            deliverables.append(report_path)
-            send_telegram_text(bot_token, chat_id, f"✅ *Hermes Finished Mission*\n\n{resp[:3000]}")
-            send_telegram_document(bot_token, chat_id, report_path, caption=f"📁 *Mission Report:* `{report_path.name}`")
+            if not deliverables:
+                report_path = DELIVERABLES_PATH / f"Hermes_Report_{int(time.time())}.md"
+                report_path.write_text(resp, encoding="utf-8")
+                deliverables.append(report_path)
+            
+            summary = resp[:1500]
+            send_telegram_text(bot_token, chat_id, f"✅ *Hermes Finished Mission*\n\n{summary}")
+            if deliverables:
+                primary = next((f for f in reversed(deliverables) if f.name.endswith(".html")), deliverables[-1])
+                if primary.exists():
+                    send_telegram_document(bot_token, chat_id, primary, caption=f"📁 *Final Deliverable:* `{primary.name}`")
             record_shared_activity("hermes_mission", f"Hermes: {task[:50]}", resp[:1000], files=[p.name for p in deliverables])
             break
 
