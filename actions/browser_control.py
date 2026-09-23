@@ -1,5 +1,7 @@
-
 from __future__ import annotations
+
+import re
+
 
 import asyncio
 import concurrent.futures
@@ -25,6 +27,7 @@ def _normalize_url(url: str) -> str:
     """
     Bare words like "instagram" → "https://instagram.com"
     Domains like "instagram.com" → "https://instagram.com"
+    Local files like "C:\\Users\\...\\index.html" → "file:///C:/Users/.../index.html"
     Full URLs pass through unchanged.
     """
     url = url.strip()
@@ -32,6 +35,13 @@ def _normalize_url(url: str) -> str:
         return "about:blank"
     if "://" in url:
         return url
+    # Handle local Windows or Unix file paths
+    clean_url = url.strip('"\'')
+    if re.match(r"^[a-zA-Z]:[\\/]", clean_url) or clean_url.startswith(("/", "\\")):
+        try:
+            return Path(clean_url).resolve().as_uri()
+        except Exception:
+            pass
     # No dot at all → assume .com  (e.g. "instagram" → "instagram.com")
     if "." not in url:
         url = url + ".com"
