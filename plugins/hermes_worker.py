@@ -233,12 +233,19 @@ CRITICAL 21ST.DEV DESIGN & VISUAL RULES:
 - When asked to build a website, ALWAYS create a SINGLE-FILE, 100% SELF-CONTAINED `index.html`.
 - NEVER USE EMPTY GRAY BOXES OR "IMAGE PLACEHOLDER" TEXT.
 - ALWAYS embed REAL, STUNNING HIGH-RESOLUTION PHOTOGRAPHY using high-quality Unsplash URLs (e.g. `https://images.unsplash.com/photo-...?auto=format&fit=crop&w=1200&q=80`) for hero banners, menu/product cards, baristas, and showcase sections.
-- Use authentic 21st.dev / Aceternity UI / Magic UI mechanics:
-  1. Rich dark palettes (`bg-[#030712]`, `bg-[#09090b]`) with subtle radial spotlight gradient overlays (`--mouse-x`, `--mouse-y` cursor tracking).
-  2. Glassmorphic cards with refined micro-borders (`border border-white/10 hover:border-cyan-500/40 bg-white/[0.03] backdrop-blur-xl`).
-  3. Smooth 3D perspective tilt physics (`perspective: 1000px; transform-style: preserve-3d; transition: transform 0.25s cubic-bezier(0.2, 0, 0, 1);`) with 3D depth pop-out layers (`translateZ(30px)` on icons and badges).
-  4. DO NOT use cheap/tacky spinning rainbow conic borders (`spin 3s`). Use sleek cursor spotlight reflections, glowing ambient blobs, and subtle Three.js starfields/particle meshes.
-  5. Interactive JavaScript (spotlight cursor trackers, smooth tilt lerp, Lucide icons, mobile menu, modals).
+- AUTONOMOUS 21st.dev / ACETERNITY UI ARCHITECTURAL SELECTION:
+  Analyze the business niche and autonomously select the matching 21st.dev design archetype:
+  1. 🎨 Creative Studio / Digital Agency / Architect:
+     • Pattern: Glyph Portal & Scroll-Driven Camera. Oversized bold typography that opens/zooms into immersive full-bleed case studies on scroll, minimalist serif/sans contrast, editorial layout.
+  2. ⚡ AI SaaS / Cloud Engine / Developer Tool:
+     • Pattern: Bento Grid + 3D Spotlight Tilt. Deep slate (`#030712`), cursor-tracking radial spotlight reflections, Three.js particle starfield, `preserve-3d` cards with `translateZ(30px)` pop-out icons and live code preview terminal.
+  3. ☕ Luxury Cafe / Restaurant / Fashion / Lifestyle:
+     • Pattern: Editorial Luxury Parallax. Rich authentic Unsplash photography, warm amber/espresso glassmorphism (`backdrop-blur-xl bg-amber-950/20`), serif typography (Playfair/Plus Jakarta), interactive tabbed menus and booking modals.
+  4. 🛡️ Fintech / Cybersecurity / Quantum / Enterprise:
+     • Pattern: Cyber Grid & Radar HUD. Glowing border traces, animated metric counters, real-time node status indicators, and cryptographic trust badges.
+  5. 📈 B2B Agency / Lead Generation / High-Ticket Sales:
+     • Pattern: Conversion Bento + Infinite Marquee. Animated client logo ticker, dynamic ROI pricing calculator, interactive FAQ accordion, and floating sticky CTA dock.
+  • ABSOLUTE RULE: DO NOT use cheap spinning rainbow conic borders (`spin 3s`). All cards must have silky cursor-tracking spotlights, micro-borders (`border-white/10`), smooth spring transitions, and Lucide icons.
 - Use Tailwind CSS CDN (`<script src="https://cdn.tailwindcss.com"></script>`), Google Fonts (Outfit / Plus Jakarta Sans), and Lucide Icons (`<script src="https://unpkg.com/lucide@latest"></script>`).
 
 Available Tool Calls:
