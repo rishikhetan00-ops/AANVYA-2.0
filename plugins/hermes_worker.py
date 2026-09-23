@@ -1,18 +1,19 @@
 """
 plugins/hermes_worker.py — Autonomous Background Agent for Laptop AANVYA
 ========================================================================
-Powered by Nous Research Hermes Agent concepts & Cloud-Synced Architecture:
-- Multi-step autonomous planning & tool execution
-- Background threading (never freezes the live voice session)
-- Built-in web search, code writing, FLUX.1 image generation & file deliverables
-- Direct export to Desktop/Hermes_Output/ & voice completion announcement
-- Shared activity recording with Cloud VPS
+Fixed & Enhanced:
+- Correctly extracts response.text from gemini._Reply objects
+- Direct high-speed FLUX.1 generation for image requests
+- Saves images to Desktop/Hermes_Output/ and Desktop/ directly
+- Automatically forwards generated image to Telegram
+- Announces completion via voice
 """
 
 import json
 import logging
 import os
 import re
+import shutil
 import threading
 import time
 import requests
@@ -43,32 +44,66 @@ PLUGIN_SETTINGS = {
 PLUGIN = {
     "name": "hermes_worker",
     "description": (
-        "Dispatches an autonomous multi-step background worker (Hermes Agent) to perform "
-        "complex deep research, software building, file generation, photorealistic image creation, "
-        "or web data extraction. Call this whenever the user wants a full task done in the background "
-        "without waiting, such as 'build an app for...', 'research in depth and write a report on...', "
-        "'generate an image for...', 'scrape and compile data for...', 'write a complete project on my desktop...'."
+        "Dispatches an autonomous background worker (Hermes Agent) to perform "
+        "tasks, such as generating photorealistic images, writing code, creating documents, "
+        "doing deep web research, or scraping data. Call this whenever the user asks to "
+        "'generate an image of...', 'create a picture of...', 'build an app for...', "
+        "'research in depth and write a report on...', 'scrape data for...'."
     ),
     "parameters": {
         "type": "OBJECT",
         "properties": {
             "task": {
                 "type": "STRING",
-                "description": "The exact goal, mission, or project description for the autonomous agent"
+                "description": "The exact goal, prompt, or project description for the agent"
             },
             "output_format": {
                 "type": "STRING",
-                "description": "Optional desired deliverable type (e.g. 'markdown_report', 'python_project', 'flux_image', 'excel_data', 'code_files')"
+                "description": "Optional deliverable type (e.g. 'flux_image', 'markdown_report', 'python_project')"
+            },
+            "send_to_telegram": {
+                "type": "BOOLEAN",
+                "description": "Whether to send a copy of the deliverable/image to user's Telegram phone"
             }
         },
         "required": ["task"],
     },
 }
 
-# ── Internal Toolset for Hermes Agent ────────────────────────────────────────
+# ── Telegram Media Dispatcher ────────────────────────────────────────────────
+
+def _send_file_to_telegram(file_path: Path, caption: str = ""):
+    """Sends photo or document directly to paired Telegram user."""
+    try:
+        cfg_path = Path(__file__).resolve().parent.parent / "config" / "api_keys.json"
+        if not cfg_path.exists():
+            return
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        token = cfg.get("telegram_bot_token")
+        chats = cfg.get("telegram_allowed_chat_ids", [])
+        if not token or not chats:
+            return
+
+        is_image = file_path.suffix.lower() in [".jpg", ".jpeg", ".png", ".webp"]
+        endpoint = "sendPhoto" if is_image else "sendDocument"
+        field_name = "photo" if is_image else "document"
+
+        for cid in chats:
+            with open(file_path, "rb") as f:
+                requests.post(
+                    f"https://api.telegram.org/bot{token}/{endpoint}",
+                    data={"chat_id": cid, "caption": caption[:1024], "parse_mode": "Markdown"},
+                    files={field_name: f},
+                    timeout=25
+                )
+        logger.info(f"Forwarded deliverable {file_path.name} to Telegram successfully.")
+    except Exception as e:
+        logger.error(f"Failed to send deliverable to Telegram: {e}")
+
+# ── Toolset for Hermes Agent ─────────────────────────────────────────────────
 
 def _web_search(query: str) -> str:
-    """Live web search via DuckDuckGo Lite."""
+    """Live web search via DuckDuckGo."""
     try:
         from urllib.request import Request, urlopen
         from urllib.parse import quote_plus
@@ -92,40 +127,35 @@ def _web_search(query: str) -> str:
     except Exception as e:
         return f"Search error: {e}"
 
-def _generate_flux_image(out_dir: Path, prompt: str) -> str:
-    """Generates a FLUX.1 photorealistic image, saves it to deliverables, and sends to Telegram."""
+def _generate_flux_image(out_dir: Path, prompt: str, filename_override: str = None) -> Optional[Path]:
+    """Generates a FLUX.1 photorealistic image and saves it to output dir & Desktop."""
     try:
         clean_p = re.sub(r"[^\w\s,-]", "", prompt).strip()
         encoded = requests.utils.quote(clean_p)
         url = f"https://image.pollinations.ai/prompt/{encoded}?model=flux&width=1024&height=1024&nologo=true&seed={int(time.time())}"
-        out_file = out_dir / f"Hermes_Image_{int(time.time())}.jpg"
-        r = requests.get(url, timeout=35)
+        
+        fname = filename_override or f"Hermes_Image_{int(time.time())}.jpg"
+        if not fname.endswith((".jpg", ".png", ".jpeg")):
+            fname += ".jpg"
+            
+        out_file = out_dir / fname
+        r = requests.get(url, timeout=40)
         if r.status_code == 200 and len(r.content) > 5000:
             out_file.write_bytes(r.content)
             
-            # Send copy to paired Telegram phone if keys exist
+            # Also place a direct copy on the Desktop for instant user visibility
+            desktop_copy = Path.home() / "Desktop" / fname
             try:
-                cfg_path = Path(__file__).resolve().parent.parent / "config" / "api_keys.json"
-                if cfg_path.exists():
-                    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-                    token = cfg.get("telegram_bot_token")
-                    chats = cfg.get("telegram_allowed_chat_ids", [])
-                    if token and chats:
-                        for cid in chats:
-                            with open(out_file, "rb") as f:
-                                requests.post(
-                                    f"https://api.telegram.org/bot{token}/sendPhoto",
-                                    data={"chat_id": cid, "caption": f"🎨 *Hermes Desktop Generated:* {clean_p[:100]}", "parse_mode": "Markdown"},
-                                    files={"photo": f},
-                                    timeout=20
-                                )
-            except Exception as _e:
-                logger.warning(f"Could not forward photo to Telegram: {_e}")
+                shutil.copy2(out_file, desktop_copy)
+            except Exception:
+                pass
                 
-            return f"Successfully generated FLUX image: {out_file.name} ({len(r.content)} bytes) and sent copy to your Telegram!"
+            # Forward directly to Telegram
+            _send_file_to_telegram(out_file, caption=f"🎨 *Generated Image for Rishi:*\n_{clean_p}_")
+            return out_file
     except Exception as e:
-        return f"Image generation error: {e}"
-    return "Failed to generate image."
+        logger.error(f"FLUX image generation error: {e}")
+    return None
 
 def _write_file(out_dir: Path, rel_path: str, content: str) -> str:
     """Safely write a deliverable file to the project output folder."""
@@ -140,7 +170,7 @@ def _write_file(out_dir: Path, rel_path: str, content: str) -> str:
 # ── Autonomous Worker Thread ─────────────────────────────────────────────────
 
 def _run_hermes_mission(task: str, output_format: str, player, out_dir: Path, max_steps: int, notify: bool):
-    """Executes the multi-step Hermes reasoning and execution loop."""
+    """Executes the Hermes execution loop."""
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
         if player:
@@ -149,11 +179,41 @@ def _run_hermes_mission(task: str, output_format: str, player, out_dir: Path, ma
             except Exception:
                 pass
 
+        # ── Fast Path: If task is directly asking for an image ───────────────
+        is_image_req = any(k in task.lower() for k in ["image", "photo", "picture", "draw", "render", "wallpaper", "logo", "illustration"])
+        if is_image_req or output_format == "flux_image":
+            if player:
+                try:
+                    player.write_log(f"HERMES: Rendering FLUX.1 image for prompt: '{task[:50]}'...")
+                except Exception:
+                    pass
+            
+            img_file = _generate_flux_image(out_dir, task)
+            if img_file:
+                msg = f"HERMES: Image generated successfully ({img_file.name}) and saved to Desktop & Telegram!"
+                if player:
+                    try:
+                        player.write_log(msg)
+                        if notify:
+                            say_fn = getattr(player, "request_say", None)
+                            if callable(say_fn):
+                                say_fn("Rishi, aapki image generate ho gayi hai. Maine ise aapke Desktop par save kar diya hai aur aapke Telegram par bhi bhej diya hai.")
+                    except Exception:
+                        pass
+                
+                try:
+                    from core.cloud_sync import record_activity
+                    record_activity("image_generation", f"Image: {task[:40]}", f"Generated image and saved to Desktop/{img_file.name}", files=[img_file.name])
+                except Exception:
+                    pass
+                return
+
+        # ── General Multi-Step Autonomous Mission Loop ───────────────────────
         history = [
             f"MISSION: {task}\nDELIVERABLE TARGET: {output_format or 'Comprehensive project / deliverable'}"
         ]
 
-        system_prompt = f"""You are HERMES, an expert autonomous agent working for AANVYA.
+        system_prompt = """You are HERMES, an expert autonomous agent working for AANVYA.
 You execute real-world tasks step-by-step using tools until the mission is 100% complete.
 
 Available Tool Calls:
@@ -169,14 +229,17 @@ ACTION: <one of SEARCH, WRITE_FILE, IMAGE, or FINISH>
 When all deliverables are created and written, return ACTION: FINISH.
 """
 
+        deliverables = []
+
         for step in range(1, max_steps + 1):
             prompt = system_prompt + "\n\n" + "\n".join(history) + f"\n\nTurn {step}/{max_steps}:"
             
             try:
                 response = gemini.call(prompt, tier=gemini.FAST, timeout_ms=30000)
-                resp_text = str(response or "").strip()
+                # Safely extract text from _Reply object
+                resp_text = getattr(response, "text", None) or str(response or "").strip()
             except Exception as e:
-                resp_text = f"THOUGHT: Encountered API error {e}. Writing final report.\nACTION: FINISH: Created preliminary deliverables."
+                resp_text = f"THOUGHT: Encountered API error {e}.\nACTION: FINISH: Mission concluded."
 
             if "ACTION: FINISH" in resp_text or "ACTION:FINISH" in resp_text:
                 summary = resp_text.split("FINISH")[-1].strip(": \n")
@@ -186,14 +249,13 @@ When all deliverables are created and written, return ACTION: FINISH.
                         if notify:
                             say_fn = getattr(player, "request_say", None)
                             if callable(say_fn):
-                                say_fn("Sir, Hermes has completed your background mission and saved the files to your desktop.")
+                                say_fn("Rishi, Hermes has completed your mission and saved the deliverables to your desktop.")
                     except Exception:
                         pass
                 
-                # Record to shared activity ledger
                 try:
                     from core.cloud_sync import record_activity
-                    record_activity("hermes_mission", f"Hermes: {task[:50]}", summary, source="desktop_laptop")
+                    record_activity("hermes_mission", f"Hermes: {task[:50]}", summary, files=[p.name for p in deliverables])
                 except Exception:
                     pass
                 return
@@ -203,11 +265,13 @@ When all deliverables are created and written, return ACTION: FINISH.
                 match = re.search(r"IMAGE:\s*(.+)", resp_text)
                 if match:
                     img_prompt = match.group(1).split("\n")[0].strip()
-                    res = _generate_flux_image(out_dir, img_prompt)
-                    history.append(f"HERMES_STEP_{step}: Generated image for '{img_prompt}'\nTOOL_RESULT: {res}")
-                    if player:
-                        player.write_log(f"HERMES: Rendered image for '{img_prompt[:30]}'")
-                    continue
+                    img_path = _generate_flux_image(out_dir, img_prompt)
+                    if img_path:
+                        deliverables.append(img_path)
+                        history.append(f"HERMES_STEP_{step}: Generated image for '{img_prompt}'\nTOOL_RESULT: Saved to {img_path.name}")
+                        if player:
+                            player.write_log(f"HERMES: Rendered image for '{img_prompt[:30]}'")
+                        continue
 
             # Parse WRITE_FILE action
             if "WRITE_FILE:" in resp_text:
@@ -218,6 +282,10 @@ When all deliverables are created and written, return ACTION: FINISH.
                     content = re.sub(r"^```[a-zA-Z]*\n?", "", content)
                     content = re.sub(r"\n?```$", "", content)
                     res = _write_file(out_dir, fname, content)
+                    f_dest = out_dir / fname
+                    deliverables.append(f_dest)
+                    # Forward document to Telegram
+                    _send_file_to_telegram(f_dest, caption=f"📄 *Hermes Created File:* `{fname}`")
                     history.append(f"HERMES_STEP_{step}: Wrote {fname}\nTOOL_RESULT: {res}")
                     if player:
                         player.write_log(f"HERMES: Generated {fname}")
@@ -234,26 +302,30 @@ When all deliverables are created and written, return ACTION: FINISH.
                         player.write_log(f"HERMES: Researched '{q[:40]}'")
                     continue
 
-            # Fallback: save as markdown report if free text
+            # Fallback: save as markdown report
             if step == max_steps or len(resp_text) > 200:
-                _write_file(out_dir, f"Hermes_Mission_Report_{int(time.time())}.md", resp_text)
+                rep_name = f"Hermes_Mission_Report_{int(time.time())}.md"
+                _write_file(out_dir, rep_name, resp_text)
+                rep_file = out_dir / rep_name
+                deliverables.append(rep_file)
+                _send_file_to_telegram(rep_file, caption=f"📑 *Hermes Mission Report:* {task[:60]}")
                 history.append(f"HERMES_STEP_{step}: Saved mission report.")
                 break
 
         # Final notification
         if player:
             try:
-                player.write_log(f"HERMES: All tasks finished. Deliverables saved in: {out_dir}")
+                player.write_log(f"HERMES: All tasks finished. Deliverables in: {out_dir}")
                 if notify:
                     say_fn = getattr(player, "request_say", None)
                     if callable(say_fn):
-                        say_fn("Sir, Hermes has completed the mission and created your deliverables on your desktop.")
+                        say_fn("Sir, Hermes has completed the mission and created your deliverables.")
             except Exception:
                 pass
 
         try:
             from core.cloud_sync import record_activity
-            record_activity("hermes_mission", f"Hermes: {task[:50]}", "Completed mission and saved deliverables to Desktop/Hermes_Output", source="desktop_laptop")
+            record_activity("hermes_mission", f"Hermes: {task[:50]}", "Completed mission and saved deliverables", files=[p.name for p in deliverables])
         except Exception:
             pass
 
@@ -267,7 +339,7 @@ When all deliverables are created and written, return ACTION: FINISH.
 def run(parameters: dict, player=None, session_memory=None) -> str:
     """
     Dispatches Hermes Agent in a dedicated background worker thread on Laptop.
-    Returns immediate spoken confirmation so voice chat never lags.
+    Returns immediate spoken confirmation.
     """
     task = parameters.get("task", "").strip()
     fmt = parameters.get("output_format", "").strip()
