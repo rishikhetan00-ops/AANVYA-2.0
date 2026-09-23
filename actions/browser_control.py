@@ -23,16 +23,33 @@ from playwright.async_api import (
 )
 _OS = platform.system()   # "Windows" | "Darwin" | "Linux"
 
+def _to_clean_file_uri(p: Path) -> str:
+    """Converts a Path object to a standard file URI with capitalized Windows drive letter."""
+    resolved = p.resolve()
+    s = str(resolved).replace("\\", "/")
+    # Ensure drive letter is uppercase (C:/ instead of c:/)
+    if len(s) >= 2 and s[1] == ":":
+        s = s[0].upper() + s[1:]
+    return f"file:///{s}"
+
 def _normalize_url(url: str) -> str:
     """
     Bare words like "instagram" → "https://instagram.com"
     Domains like "instagram.com" → "https://instagram.com"
-    Local files (absolute or relative) → "file:///C:/Users/.../index.html"
+    Local files (absolute or relative) → "file:///C:/Users/.../index.html" (Uppercase C:)
     Full URLs pass through unchanged.
     """
     url = url.strip()
     if not url:
         return "about:blank"
+        
+    # If already a file:// URI with lowercase drive, uppercase it
+    if url.lower().startswith("file:///"):
+        after_scheme = url[8:]
+        if len(after_scheme) >= 2 and after_scheme[1] == ":":
+            return "file:///" + after_scheme[0].upper() + after_scheme[1:]
+        return url
+        
     if "://" in url:
         return url
 
@@ -42,7 +59,7 @@ def _normalize_url(url: str) -> str:
     if re.match(r"^[a-zA-Z]:[\\/]", clean_url) or clean_url.startswith(("/", "\\")):
         p = Path(clean_url)
         if p.exists():
-            return p.resolve().as_uri()
+            return _to_clean_file_uri(p)
 
     # 2. Check local relative file paths (e.g. "index.html", "Hermes_Output/index.html")
     if clean_url.endswith((".html", ".htm", ".svg", ".pdf", ".png", ".jpg", ".txt", ".md")):
@@ -54,7 +71,7 @@ def _normalize_url(url: str) -> str:
         ]
         for cp in candidate_paths:
             if cp.exists():
-                return cp.resolve().as_uri()
+                return _to_clean_file_uri(cp)
 
     # 3. No dot at all → assume web domain (e.g. "instagram" → "https://instagram.com")
     if "." not in url:
