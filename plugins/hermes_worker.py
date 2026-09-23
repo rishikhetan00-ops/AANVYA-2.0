@@ -93,7 +93,7 @@ def _web_search(query: str) -> str:
         return f"Search error: {e}"
 
 def _generate_flux_image(out_dir: Path, prompt: str) -> str:
-    """Generates a FLUX.1 photorealistic image and saves it to deliverables."""
+    """Generates a FLUX.1 photorealistic image, saves it to deliverables, and sends to Telegram."""
     try:
         clean_p = re.sub(r"[^\w\s,-]", "", prompt).strip()
         encoded = requests.utils.quote(clean_p)
@@ -102,7 +102,27 @@ def _generate_flux_image(out_dir: Path, prompt: str) -> str:
         r = requests.get(url, timeout=35)
         if r.status_code == 200 and len(r.content) > 5000:
             out_file.write_bytes(r.content)
-            return f"Successfully generated FLUX image: {out_file.name} ({len(r.content)} bytes)"
+            
+            # Send copy to paired Telegram phone if keys exist
+            try:
+                cfg_path = Path(__file__).resolve().parent.parent / "config" / "api_keys.json"
+                if cfg_path.exists():
+                    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+                    token = cfg.get("telegram_bot_token")
+                    chats = cfg.get("telegram_allowed_chat_ids", [])
+                    if token and chats:
+                        for cid in chats:
+                            with open(out_file, "rb") as f:
+                                requests.post(
+                                    f"https://api.telegram.org/bot{token}/sendPhoto",
+                                    data={"chat_id": cid, "caption": f"🎨 *Hermes Desktop Generated:* {clean_p[:100]}", "parse_mode": "Markdown"},
+                                    files={"photo": f},
+                                    timeout=20
+                                )
+            except Exception as _e:
+                logger.warning(f"Could not forward photo to Telegram: {_e}")
+                
+            return f"Successfully generated FLUX image: {out_file.name} ({len(r.content)} bytes) and sent copy to your Telegram!"
     except Exception as e:
         return f"Image generation error: {e}"
     return "Failed to generate image."
