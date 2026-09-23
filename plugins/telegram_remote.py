@@ -185,7 +185,7 @@ _NS = "telegram_remote"
 _API           = "https://api.telegram.org/bot{token}/{method}"
 _FILE_API      = "https://api.telegram.org/file/bot{token}/{path}"
 _POLL_TIMEOUT  = 20      # long-poll seconds; also the worst-case stop latency
-_HTTP_TIMEOUT  = 35      # must exceed _POLL_TIMEOUT
+_HTTP_TIMEOUT  = 50      # must exceed _POLL_TIMEOUT
 _MAX_AGE       = 120     # refuse messages older than this (seconds)
 _FUTURE_SKEW   = 60      # tolerate this much clock skew the other way
 _START_GRACE   = 2       # seconds of slack on the start floor
@@ -397,6 +397,24 @@ def _http():
 
 
 def _session():
+    """One keep-alive Session per thread with connection retries."""
+    try:
+        s = _http().Session()
+        from requests.adapters import HTTPAdapter
+        from urllib3.util import Retry
+        retries = Retry(total=3, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
+        adapter = HTTPAdapter(max_retries=retries)
+        s.mount('https://', adapter)
+        s.mount('http://', adapter)
+        return s
+    except Exception:
+        pass
+    try:
+        return _http().Session()
+    except Exception:
+        return None
+
+def _session_old():
     """One keep-alive Session per thread.
 
     Without it every poll pays a fresh TCP connection and TLS handshake — one
@@ -413,7 +431,7 @@ def _session():
 def _api(sess, token: str, method: str, **kw):
     """One place where a URL is built, so the token appears in one line of code."""
     url = _API.format(token=token, method=method)
-    kw.setdefault("timeout", 20)
+    kw.setdefault("timeout", 45)
     if sess is not None:
         return sess.post(url, **kw) if ("json" in kw or "data" in kw or "files" in kw) \
             else sess.get(url, **kw)
@@ -1229,7 +1247,7 @@ def _download(token: str, file_id: str) -> tuple[bytes, str]:
     """
     sess = _session()
     try:
-        r = _api(sess, token, "getFile", params={"file_id": file_id}, timeout=20)
+        r = _api(sess, token, "getFile", params={"file_id": file_id}, timeout=60)
         info = r.json()
         if not info.get("ok"):
             raise RuntimeError(info.get("description", "getFile failed"))
