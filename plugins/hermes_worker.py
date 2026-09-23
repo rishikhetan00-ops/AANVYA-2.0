@@ -233,10 +233,12 @@ CRITICAL 21ST.DEV DESIGN & VISUAL RULES:
 - When asked to build a website, ALWAYS create a SINGLE-FILE, 100% SELF-CONTAINED `index.html`.
 - NEVER USE EMPTY GRAY BOXES OR "IMAGE PLACEHOLDER" TEXT.
 - ALWAYS embed REAL, STUNNING HIGH-RESOLUTION PHOTOGRAPHY using high-quality Unsplash URLs (e.g. `https://images.unsplash.com/photo-...?auto=format&fit=crop&w=1200&q=80`) for hero banners, menu/product cards, baristas, and showcase sections.
-- Use 21st.dev / Magic UI aesthetics:
-  1. Rich modern dark backgrounds (`bg-[#09090b]`, `bg-zinc-950`) with warm glowing radial mesh gradients and glassmorphism cards (`backdrop-blur-xl bg-white/[0.04] border border-white/[0.08] hover:border-amber-500/50 transition-all duration-300`).
-  2. Vibrant accent colors, glowing pill badges, smooth hover animations, and Lucide vector icons (`<i data-lucide="..."></i>`).
-  3. Interactive JavaScript (filters, counters, mobile menu toggle, modals).
+- Use authentic 21st.dev / Aceternity UI / Magic UI mechanics:
+  1. Rich dark palettes (`bg-[#030712]`, `bg-[#09090b]`) with subtle radial spotlight gradient overlays (`--mouse-x`, `--mouse-y` cursor tracking).
+  2. Glassmorphic cards with refined micro-borders (`border border-white/10 hover:border-cyan-500/40 bg-white/[0.03] backdrop-blur-xl`).
+  3. Smooth 3D perspective tilt physics (`perspective: 1000px; transform-style: preserve-3d; transition: transform 0.25s cubic-bezier(0.2, 0, 0, 1);`) with 3D depth pop-out layers (`translateZ(30px)` on icons and badges).
+  4. DO NOT use cheap/tacky spinning rainbow conic borders (`spin 3s`). Use sleek cursor spotlight reflections, glowing ambient blobs, and subtle Three.js starfields/particle meshes.
+  5. Interactive JavaScript (spotlight cursor trackers, smooth tilt lerp, Lucide icons, mobile menu, modals).
 - Use Tailwind CSS CDN (`<script src="https://cdn.tailwindcss.com"></script>`), Google Fonts (Outfit / Plus Jakarta Sans), and Lucide Icons (`<script src="https://unpkg.com/lucide@latest"></script>`).
 
 Available Tool Calls:
