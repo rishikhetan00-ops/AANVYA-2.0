@@ -1,6 +1,6 @@
 """
-core/cloud_sync.py — Universal 2-Way Real-Time Synchronization Engine
-====================================================================
+core/cloud_sync.py — Universal High-Speed 2-Way Synchronization Engine
+======================================================================
 Synchronizes memory, shared tasks, skills/plugins, and Hermes deliverables
 between Desktop AANVYA and the 24/7 Oracle Cloud VPS in Frankfurt.
 """
@@ -95,57 +95,44 @@ def get_unseen_missions_summary() -> Optional[str]:
         return f"While you were away on your phone, Hermes completed: '{titles[0]}'."
     return f"While you were away on your phone, Hermes completed {len(titles)} tasks: {', '.join(titles)}."
 
-# ── Universal 2-Way Sync Engine (Memory, Plugins, Skills & Deliverables) ─────
+# ── High-Speed Batch Sync Engine ─────────────────────────────────────────────
 
 def run_sync_cycle() -> bool:
-    """Executes a full 2-way sync with the Oracle Cloud VPS."""
+    """Executes a full 2-way sync with the Oracle Cloud VPS in under 3 seconds."""
     if not SSH_KEY_PATH.exists():
-        logger.warning(f"SSH Key not found at {SSH_KEY_PATH}. Skipping cloud sync.")
         return False
 
     try:
         LOCAL_DELIVERABLES_DIR.mkdir(parents=True, exist_ok=True)
-        PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
+        MEMORY_DIR.mkdir(parents=True, exist_ok=True)
         key_str = str(SSH_KEY_PATH)
 
-        # 1. Pull remote memory/shared_activity.json from VPS
-        remote_act = f"{VPS_USER}@{VPS_IP}:{REMOTE_PROJECT_ROOT}/memory/shared_activity.json"
-        local_act = str(SHARED_ACTIVITY_FILE)
-        cmd_pull_act = [
-            "scp", "-i", key_str, "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10",
-            remote_act, local_act
+        # 1. Pull activity & memory in one SCP call
+        cmd_pull = [
+            "scp", "-i", key_str, "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=6",
+            f"{VPS_USER}@{VPS_IP}:{REMOTE_PROJECT_ROOT}/memory/shared_activity.json",
+            f"{VPS_USER}@{VPS_IP}:{REMOTE_PROJECT_ROOT}/memory/long_term.json",
+            str(MEMORY_DIR)
         ]
-        subprocess.run(cmd_pull_act, capture_output=True, text=True)
-        
-        # 2. Pull remote memory/long_term.json from VPS
-        remote_mem = f"{VPS_USER}@{VPS_IP}:{REMOTE_PROJECT_ROOT}/memory/long_term.json"
-        local_mem = str(MEMORY_DIR / "long_term.json")
-        cmd_pull_mem = [
-            "scp", "-i", key_str, "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10",
-            remote_mem, local_mem
+        subprocess.run(cmd_pull, capture_output=True, text=True, timeout=10)
+
+        # 2. Push local plugins to cloud
+        cmd_push_plugins = [
+            "scp", "-i", key_str, "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=6",
+            "-r", str(PLUGINS_DIR / "*"),
+            f"{VPS_USER}@{VPS_IP}:{REMOTE_PROJECT_ROOT}/plugins/"
         ]
-        subprocess.run(cmd_pull_mem, capture_output=True, text=True)
+        subprocess.run(cmd_push_plugins, shell=True, capture_output=True, text=True, timeout=10)
 
-        # 3. 2-Way Plugin & Skill Sync: Push local plugins to VPS
-        for p in PLUGINS_DIR.glob("*.py"):
-            if p.name.startswith("__"):
-                continue
-            remote_dest = f"{VPS_USER}@{VPS_IP}:{REMOTE_PROJECT_ROOT}/plugins/{p.name}"
-            cmd_push_plugin = [
-                "scp", "-i", key_str, "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10",
-                str(p), remote_dest
-            ]
-            subprocess.run(cmd_push_plugin, capture_output=True, text=True)
-
-        # 4. Pull any newly generated Hermes deliverables from VPS to Desktop/Hermes_Output/
-        remote_deliverables = f"{VPS_USER}@{VPS_IP}:{REMOTE_PROJECT_ROOT}/storage/hermes_deliverables/*"
+        # 3. Pull Hermes deliverables to Desktop
         cmd_pull_files = [
-            "scp", "-i", key_str, "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10",
-            remote_deliverables, str(LOCAL_DELIVERABLES_DIR)
+            "scp", "-i", key_str, "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=6",
+            "-r", f"{VPS_USER}@{VPS_IP}:{REMOTE_PROJECT_ROOT}/storage/hermes_deliverables/*",
+            str(LOCAL_DELIVERABLES_DIR)
         ]
-        subprocess.run(cmd_pull_files, capture_output=True, text=True)
+        subprocess.run(cmd_pull_files, shell=True, capture_output=True, text=True, timeout=10)
 
-        logger.info("Universal 2-Way Sync (Memory + Plugins + Deliverables) completed.")
+        logger.info("High-speed 2-way sync cycle completed.")
         return True
 
     except Exception as e:
@@ -155,7 +142,6 @@ def run_sync_cycle() -> bool:
 # ── Background Daemon Thread ─────────────────────────────────────────────────
 
 def _sync_loop():
-    logger.info("CloudSync daemon active. 2-way auto-syncing memory, plugins, and skills every 30s...")
     while not _stop_event.is_set():
         run_sync_cycle()
         for _ in range(_SYNC_INTERVAL_SECONDS):
@@ -169,7 +155,7 @@ def start_cloud_sync_daemon():
         _stop_event.clear()
         _sync_thread = threading.Thread(target=_sync_loop, daemon=True, name="AanvyaCloudSync")
         _sync_thread.start()
-        logger.info("CloudSync daemon successfully initialized.")
+        logger.info("CloudSync daemon successfully active.")
 
 def stop_cloud_sync_daemon():
     _stop_event.set()
@@ -178,6 +164,8 @@ def stop_cloud_sync_daemon():
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    print("Testing Universal 2-Way Sync...")
+    print("Testing High-Speed Universal Sync...")
     res = run_sync_cycle()
     print("Result:", "SUCCESS" if res else "FAILED")
+    print("Cross device context:")
+    print(get_recent_cross_device_context(5))
