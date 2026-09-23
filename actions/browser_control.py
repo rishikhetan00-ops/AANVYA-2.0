@@ -27,7 +27,7 @@ def _normalize_url(url: str) -> str:
     """
     Bare words like "instagram" → "https://instagram.com"
     Domains like "instagram.com" → "https://instagram.com"
-    Local files like "C:\\Users\\...\\index.html" → "file:///C:/Users/.../index.html"
+    Local files (absolute or relative) → "file:///C:/Users/.../index.html"
     Full URLs pass through unchanged.
     """
     url = url.strip()
@@ -35,14 +35,28 @@ def _normalize_url(url: str) -> str:
         return "about:blank"
     if "://" in url:
         return url
-    # Handle local Windows or Unix file paths
+
     clean_url = url.strip('"\'')
+
+    # 1. Check absolute file paths (e.g. C:\Users\...\index.html)
     if re.match(r"^[a-zA-Z]:[\\/]", clean_url) or clean_url.startswith(("/", "\\")):
-        try:
-            return Path(clean_url).resolve().as_uri()
-        except Exception:
-            pass
-    # No dot at all → assume .com  (e.g. "instagram" → "instagram.com")
+        p = Path(clean_url)
+        if p.exists():
+            return p.resolve().as_uri()
+
+    # 2. Check local relative file paths (e.g. "index.html", "Hermes_Output/index.html")
+    if clean_url.endswith((".html", ".htm", ".svg", ".pdf", ".png", ".jpg", ".txt", ".md")):
+        candidate_paths = [
+            Path.home() / "Desktop" / "Hermes_Output" / clean_url,
+            Path.home() / "Desktop" / clean_url,
+            Path.cwd() / clean_url,
+            Path.cwd() / "storage" / "hermes_deliverables" / clean_url
+        ]
+        for cp in candidate_paths:
+            if cp.exists():
+                return cp.resolve().as_uri()
+
+    # 3. No dot at all → assume web domain (e.g. "instagram" → "https://instagram.com")
     if "." not in url:
         url = url + ".com"
     return "https://" + url
