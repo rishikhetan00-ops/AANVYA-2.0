@@ -27,56 +27,98 @@ def _to_clean_file_uri(p: Path) -> str:
     """Converts a Path object to a standard file URI with capitalized Windows drive letter."""
     resolved = p.resolve()
     s = str(resolved).replace("\\", "/")
-    # Ensure drive letter is uppercase (C:/ instead of c:/)
     if len(s) >= 2 and s[1] == ":":
         s = s[0].upper() + s[1:]
     return f"file:///{s}"
 
 def _normalize_url(url: str) -> str:
     """
-    Bare words like "instagram" → "https://instagram.com"
-    Domains like "instagram.com" → "https://instagram.com"
-    Local files (absolute or relative) → "file:///C:/Users/.../index.html" (Uppercase C:)
-    Full URLs pass through unchanged.
+    Intelligently normalizes web URLs vs local files.
+    Auto-heals hallucinated paths (e.g. 'c/Users/User/...' → 'C:/Users/BIT/Desktop/Hermes_Output/...').
     """
     url = url.strip()
     if not url:
         return "about:blank"
-        
-    # If already a file:// URI with lowercase drive, uppercase it
+
+    # 1. Clean existing file:// URIs
     if url.lower().startswith("file:///"):
-        after_scheme = url[8:]
-        if len(after_scheme) >= 2 and after_scheme[1] == ":":
-            return "file:///" + after_scheme[0].upper() + after_scheme[1:]
-        return url
-        
-    if "://" in url:
-        return url
+        after = url[8:]
+        # Fix missing colon like file:///c/Users/... -> file:///C:/Users/...
+        if len(after) >= 2 and after[0].isalpha() and after[1] == "/":
+            after = after[0].upper() + ":" + after[1:]
+        elif len(after) >= 2 and after[1] == ":":
+            after = after[0].upper() + after[1:]
+        return f"file:///{after}"
 
-    clean_url = url.strip('"\'')
+    # 2. Check if this is an explicit HTTP/HTTPS URL
+    if url.startswith(("http://", "https://")):
+        # If model prepended https:// to a local Windows path like https://c/Users/...
+        m = re.match(r"^https?://([a-zA-Z])[/\\](.*)$", url)
+        if m:
+            drive = m.group(1).upper()
+            rest = m.group(2)
+            url = f"{drive}:/{rest}"
+        else:
+            return url
 
-    # 1. Check absolute file paths (e.g. C:\Users\...\index.html)
-    if re.match(r"^[a-zA-Z]:[\\/]", clean_url) or clean_url.startswith(("/", "\\")):
-        p = Path(clean_url)
-        if p.exists():
-            return _to_clean_file_uri(p)
+    clean_url = url.strip('"\'').replace("\\", "/")
 
-    # 2. Check local relative file paths (e.g. "index.html", "Hermes_Output/index.html")
-    if clean_url.endswith((".html", ".htm", ".svg", ".pdf", ".png", ".jpg", ".txt", ".md")):
-        candidate_paths = [
-            Path.home() / "Desktop" / "Hermes_Output" / clean_url,
-            Path.home() / "Desktop" / clean_url,
-            Path.cwd() / clean_url,
-            Path.cwd() / "storage" / "hermes_deliverables" / clean_url
+    # Fix broken drive prefix like "c/Users/..." -> "C:/Users/..."
+    if len(clean_url) >= 2 and clean_url[0].isalpha() and clean_url[1] == "/":
+        clean_url = clean_url[0].upper() + ":" + clean_url[1:]
+
+    # 3. Auto-heal any file paths or Desktop targets
+    is_file_target = (
+        clean_url.endswith((".html", ".htm", ".svg", ".pdf", ".png", ".jpg", ".txt", ".md")) or
+        "desktop" in clean_url.lower() or
+        re.match(r"^[a-zA-Z]:", clean_url) or
+        clean_url.startswith("/")
+    )
+
+    if is_file_target:
+        # Check direct existence
+        try:
+            p = Path(clean_url)
+            if p.exists() and p.is_file():
+                return _to_clean_file_uri(p)
+        except Exception:
+            pass
+
+        # Extract filename (e.g. index.html)
+        target_fname = Path(clean_url).name
+        search_dirs = [
+            Path.home() / "Desktop" / "Hermes_Output",
+            Path.home() / "Desktop",
+            Path.cwd(),
+            Path.cwd() / "storage" / "hermes_deliverables",
         ]
-        for cp in candidate_paths:
-            if cp.exists():
-                return _to_clean_file_uri(cp)
+        
+        # Check if target_fname exists in known output directories
+        for d in search_dirs:
+            candidate = d / target_fname
+            if candidate.exists() and candidate.is_file():
+                return _to_clean_file_uri(candidate)
 
-    # 3. No dot at all → assume web domain (e.g. "instagram" → "https://instagram.com")
-    if "." not in url:
-        url = url + ".com"
-    return "https://" + url
+        # Search recursively inside Desktop/Hermes_Output if nested
+        hermes_out = Path.home() / "Desktop" / "Hermes_Output"
+        if hermes_out.exists():
+            for f in hermes_out.rglob(target_fname):
+                if f.is_file():
+                    return _to_clean_file_uri(f)
+
+        # If it's a file target but doesn't exist, return file:/// URI anyway rather than invalid https://
+        if re.match(r"^[a-zA-Z]:", clean_url):
+            drive = clean_url[0].upper()
+            rest = clean_url[2:].lstrip("/")
+            return f"file:///{drive}:/{rest}"
+
+    # 4. Standard web domain fallback (e.g. "google" -> "https://google.com")
+    if "://" not in clean_url:
+        if "." not in clean_url:
+            clean_url = clean_url + ".com"
+        return "https://" + clean_url
+
+    return clean_url
 
 
 def _user_agent() -> str:
