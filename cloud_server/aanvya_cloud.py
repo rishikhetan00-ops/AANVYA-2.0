@@ -1,8 +1,15 @@
 """
-AANVYA 24/7 Cloud Assistant & Telegram Gateway
-==============================================
-Runs continuously on Oracle Cloud VPS (Always Free Ubuntu 24.04).
-Unified Long-Term Memory, Gemini 2.5-Flash Brain Ladder, and Autonomous Hermes Agent.
+AANVYA 24/7 Cloud Assistant & Business Automation Engine
+========================================================
+Runs continuously on Oracle Cloud Always Free Ubuntu VPS.
+Features:
+- Gemini Flash 3.x / Flash-Latest Brain Ladder
+- FLUX.1 Photorealistic AI Image Generation (`/image`)
+- Microsoft Edge-TTS Voice Note Replies (`/voice`, `/voicemode`)
+- Autonomous Background Cron Scheduler (Daily briefings, Market trends)
+- Hermes Autonomous Agent (`/hermes <mission>`)
+- Autonomous Business Monetization Idea Engine (`/ideas`, `/venture`)
+- Unified Long-Term Memory & Founder Persona
 """
 
 import os
@@ -11,9 +18,11 @@ import time
 import json
 import logging
 import threading
+import asyncio
 import requests
 import re
 import shutil
+import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
@@ -48,8 +57,10 @@ CONFIG_PATH = PROJECT_ROOT / "config" / "api_keys.json"
 STORAGE_DIR = PROJECT_ROOT / "storage"
 DELIVERABLES_PATH = STORAGE_DIR / "hermes_deliverables"
 DELIVERABLES_PATH.mkdir(parents=True, exist_ok=True)
+MEDIA_DIR = STORAGE_DIR / "cloud_media"
+MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 
-# ── API Key Management ───────────────────────────────────────────────────────
+# ── Configuration & Keys ─────────────────────────────────────────────────────
 
 def get_api_keys() -> Dict[str, Any]:
     if CONFIG_PATH.exists():
@@ -81,11 +92,14 @@ def add_allowed_chat(chat_id: int):
         try:
             with open(CONFIG_PATH, "w", encoding="utf-8") as f:
                 json.dump(keys, f, indent=4)
-            logger.info(f"Added and saved new allowed chat ID: {chat_id}")
+            logger.info(f"Added and saved allowed chat ID: {chat_id}")
         except Exception as e:
             logger.error(f"Failed to save allowed chat ID: {e}")
 
-# ── Gemini 2.5 Brain (High-Resilience Multi-Model Ladder) ─────────────────────
+# In-memory Voice Mode Toggle (False = text only, True = text + audio voice note)
+VOICE_MODE_ENABLED = False
+
+# ── Gemini Brain Ladder ──────────────────────────────────────────────────────
 
 MODEL_LADDER = [
     "gemini-flash-latest",
@@ -96,37 +110,17 @@ MODEL_LADDER = [
     "gemini-pro-latest",
 ]
 
-AANVYA_SYSTEM_PROMPT = """You are AANVYA, an elite personal AI intelligence companion created for Rishi.
-You are brilliant, razor-sharp, proactive, witty, and deeply loyal.
-Tone: Natural, confident, clear, articulate, engaging.
-When Rishi speaks with you, keep answers concise yet thorough.
-Always use Markdown formatting when useful for readability."""
+AANVYA_SYSTEM_PROMPT = """You are AANVYA, an elite, ultra-competent AI intelligence companion and business automation engine created for Rishi.
+You are brilliant, loyal, razor-sharp, proactive, witty, and strategic.
+You specialize in autonomous workflows: lead generation, business building, automated social media, and technical research.
+Tone: Natural, articulate, confident, encouraging, concise yet impactful."""
 
 def call_gemini(prompt: str, system_instruction: str = AANVYA_SYSTEM_PROMPT) -> str:
-    """Call Google Gemini API using the Gemini 2.5 model ladder."""
+    """Call Google Gemini API using the Gemini 3.x/Flash-Latest model ladder."""
     api_key = get_gemini_api_key()
     if not api_key:
         return "⚠️ Gemini API Key is missing in `config/api_keys.json`."
 
-    # Try modern google-genai SDK if installed
-    try:
-        from google import genai
-        client = genai.Client(api_key=api_key)
-        for model in MODEL_LADDER:
-            try:
-                response = client.models.generate_content(
-                    model=model,
-                    contents=prompt,
-                    config={"system_instruction": system_instruction}
-                )
-                if response and response.text:
-                    return response.text.strip()
-            except Exception as e:
-                logger.warning(f"SDK model {model} failed: {e}. Trying next model...")
-    except ImportError:
-        pass
-
-    # Fallback to direct REST API v1beta
     for model in MODEL_LADDER:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
         payload = {
@@ -134,103 +128,60 @@ def call_gemini(prompt: str, system_instruction: str = AANVYA_SYSTEM_PROMPT) -> 
             "systemInstruction": {"parts": [{"text": system_instruction}]}
         }
         try:
-            r = requests.post(url, json=payload, timeout=30)
+            r = requests.post(url, json=payload, timeout=35)
             if r.status_code == 200:
                 data = r.json()
                 text = data["candidates"][0]["content"]["parts"][0]["text"]
                 return text.strip()
             else:
-                logger.warning(f"REST model {model} returned status {r.status_code}: {r.text[:120]}")
+                logger.warning(f"Model {model} status {r.status_code}. Trying fallback...")
         except Exception as e:
-            logger.warning(f"REST request for {model} failed: {e}")
+            logger.warning(f"Request for {model} failed: {e}")
 
-    return "⚠️ Could not reach Gemini models. Please verify API quota or network connection."
+    return "⚠️ Could not reach Gemini models. Please check network/quota."
 
-# ── Hermes Autonomous Multi-Step Worker ──────────────────────────────────────
+# ── FLUX.1 Photorealistic AI Image Generator ─────────────────────────────────
 
-def hermes_web_search(query: str, num_results: int = 4) -> str:
+def generate_flux_image(prompt: str, filename_prefix: str = "flux") -> Optional[Path]:
+    """Generates a photorealistic AI image using FLUX.1 engine."""
+    clean_prompt = re.sub(r"[^\w\s,-]", "", prompt).strip()
+    encoded = requests.utils.quote(clean_prompt)
+    url = f"https://image.pollinations.ai/prompt/{encoded}?model=flux&width=1024&height=1024&nologo=true&seed={int(time.time())}"
+    
+    out_file = MEDIA_DIR / f"{filename_prefix}_{int(time.time())}.jpg"
     try:
-        from duckduckgo_search import DDGS
-        with DDGS() as ddgs:
-            res = list(ddgs.text(query, max_results=num_results))
-            if res:
-                return "\n".join([f"- [{r.get('title')}]({r.get('href')}): {r.get('body')}" for r in res])
-    except Exception:
-        pass
-    try:
-        url = f"https://html.duckduckgo.com/html/?q={requests.utils.quote(query)}"
-        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(resp.text, "html.parser")
-        snippets = []
-        for r in soup.select(".result__body")[:num_results]:
-            snippet = r.get_text(strip=True)
-            if snippet:
-                snippets.append(snippet)
-        if snippets:
-            return "\n".join(snippets)
+        r = requests.get(url, timeout=40)
+        if r.status_code == 200 and len(r.content) > 5000:
+            out_file.write_bytes(r.content)
+            return out_file
     except Exception as e:
-        logger.error(f"Hermes web search error: {e}")
-    return "No search results found."
+        logger.error(f"FLUX image generation error: {e}")
+    return None
 
-def run_hermes_mission(task: str, chat_id: int, bot_token: str):
-    """Executes a multi-step autonomous agent mission in the background."""
-    send_telegram(bot_token, chat_id, f"🚀 *Hermes Autonomous Agent Dispatched*\n\n*Mission:* {task}\n_Working in background..._")
-    
-    system_prompt = (
-        "You are Hermes, an elite autonomous research & coding agent working for AANVYA.\n"
-        "Your mission is to independently investigate, search, and produce a high-value deliverable for the user.\n"
-        "Available actions in your response:\n"
-        "1. `SEARCH: <query>` — To perform live web research\n"
-        "2. `WRITE_FILE: <filename>|||<content>` — To save reports, code, or data\n"
-        "3. `ACTION: FINISH <summary>` — When your mission is completely achieved."
-    )
-    
-    history = [f"MISSION: {task}"]
-    max_steps = 6
-    deliverables = []
-    
-    for step in range(1, max_steps + 1):
-        prompt = system_prompt + "\n\n" + "\n".join(history) + f"\n\nStep {step}/{max_steps}:"
-        resp = call_gemini(prompt)
-        
-        if "ACTION: FINISH" in resp or "ACTION:FINISH" in resp:
-            summary = resp.split("FINISH")[-1].strip(": \n")
-            send_telegram(bot_token, chat_id, f"✅ *Hermes Mission Completed!*\n\n{summary}")
-            return
-        
-        if "WRITE_FILE:" in resp:
-            m = re.search(r"WRITE_FILE:\s*([^|\n]+)\|\|\|(.*)", resp, re.DOTALL)
-            if m:
-                fname = m.group(1).strip()
-                content = m.group(2).strip()
-                content = re.sub(r"^```[a-zA-Z]*\n?", "", content)
-                content = re.sub(r"\n?```$", "", content)
-                fpath = DELIVERABLES_PATH / fname
-                fpath.write_text(content, encoding="utf-8")
-                deliverables.append(fpath)
-                history.append(f"STEP_{step}: Wrote {fname}")
-                send_telegram(bot_token, chat_id, f"📝 *Hermes Created Deliverable:* `{fname}`")
-                continue
-                
-        if "SEARCH:" in resp:
-            m = re.search(r"SEARCH:\s*(.+)", resp)
-            if m:
-                q = m.group(1).split("\n")[0].strip()
-                res = hermes_web_search(q)
-                history.append(f"STEP_{step}: Searched '{q}'\nRESULTS:\n{res}")
-                continue
-                
-        if step == max_steps or len(resp) > 200:
-            report_path = DELIVERABLES_PATH / f"Hermes_Report_{int(time.time())}.md"
-            report_path.write_text(resp, encoding="utf-8")
-            deliverables.append(report_path)
-            send_telegram(bot_token, chat_id, f"✅ *Hermes Finished Mission*\n\n{resp[:3000]}")
-            break
+# ── Microsoft Edge-TTS Voice Audio Notes ────────────────────────────────────
 
-# ── Telegram Protocol ────────────────────────────────────────────────────────
+async def _synthesize_voice_async(text: str, out_path: Path, voice: str = "en-IN-NeerjaNeural"):
+    import edge_tts
+    # Clean markdown formatting for smooth speech
+    clean_text = re.sub(r"[*_`#~>-]", "", text).strip()
+    communicate = edge_tts.Communicate(clean_text[:800], voice)
+    await communicate.save(str(out_path))
 
-def send_telegram(token: str, chat_id: int, text: str, parse_mode: str = "Markdown") -> None:
+def generate_voice_note(text: str, language: str = "en") -> Optional[Path]:
+    """Synthesizes high-definition voice audio note."""
+    voice = "hi-IN-SwaraNeural" if language == "hi" or any("\u0900" <= c <= "\u097F" for c in text) else "en-IN-NeerjaNeural"
+    out_file = MEDIA_DIR / f"voice_{int(time.time())}.ogg"
+    try:
+        asyncio.run(_synthesize_voice_async(text, out_file, voice=voice))
+        if out_file.exists() and out_file.stat().st_size > 1000:
+            return out_file
+    except Exception as e:
+        logger.error(f"Edge-TTS synthesis error: {e}")
+    return None
+
+# ── Telegram Protocol & Media Dispatch ───────────────────────────────────────
+
+def send_telegram_text(token: str, chat_id: int, text: str, parse_mode: str = "Markdown") -> None:
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {
         "chat_id": chat_id,
@@ -245,6 +196,30 @@ def send_telegram(token: str, chat_id: int, text: str, parse_mode: str = "Markdo
             requests.post(url, json=payload, timeout=20)
     except Exception as e:
         logger.error(f"Failed to send telegram message: {e}")
+
+def send_telegram_photo(token: str, chat_id: int, photo_path: Path, caption: str = "") -> bool:
+    url = f"https://api.telegram.org/bot{token}/sendPhoto"
+    try:
+        with open(photo_path, "rb") as f:
+            files = {"photo": f}
+            data = {"chat_id": chat_id, "caption": caption[:1024], "parse_mode": "Markdown"}
+            r = requests.post(url, data=data, files=files, timeout=30)
+            return r.status_code == 200
+    except Exception as e:
+        logger.error(f"Failed to send telegram photo: {e}")
+        return False
+
+def send_telegram_voice(token: str, chat_id: int, audio_path: Path, caption: str = "") -> bool:
+    url = f"https://api.telegram.org/bot{token}/sendVoice"
+    try:
+        with open(audio_path, "rb") as f:
+            files = {"voice": f}
+            data = {"chat_id": chat_id, "caption": caption[:1024]}
+            r = requests.post(url, data=data, files=files, timeout=30)
+            return r.status_code == 200
+    except Exception as e:
+        logger.error(f"Failed to send telegram voice: {e}")
+        return False
 
 def get_system_stats() -> str:
     """Return VPS CPU, RAM, Uptime & Disk stats."""
@@ -279,19 +254,166 @@ def get_system_stats() -> str:
         f"• *Uptime:* {hours}h {mins}m\n"
         f"• *RAM:* {mem_used} MB / {mem_total} MB ({((mem_used/max(mem_total,1))*100):.1f}%)\n"
         f"• *Storage:* {free // (1024**3)} GB free of {total // (1024**3)} GB\n"
-        "• *Active Engine:* Gemini 2.5 Flash + Unified Memory + Hermes"
+        "• *Engines:* Gemini Flash 3.x + FLUX.1 + Edge-TTS + Hermes Autonomous Agent"
     )
+
+# ── Hermes Autonomous Multi-Step Worker ──────────────────────────────────────
+
+def hermes_web_search(query: str, num_results: int = 4) -> str:
+    try:
+        from duckduckgo_search import DDGS
+        with DDGS() as ddgs:
+            res = list(ddgs.text(query, max_results=num_results))
+            if res:
+                return "\n".join([f"- [{r.get('title')}]({r.get('href')}): {r.get('body')}" for r in res])
+    except Exception:
+        pass
+    try:
+        url = f"https://html.duckduckgo.com/html/?q={requests.utils.quote(query)}"
+        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(resp.text, "html.parser")
+        snippets = []
+        for r in soup.select(".result__body")[:num_results]:
+            snippet = r.get_text(strip=True)
+            if snippet:
+                snippets.append(snippet)
+        if snippets:
+            return "\n".join(snippets)
+    except Exception as e:
+        logger.error(f"Hermes web search error: {e}")
+    return "No search results found."
+
+def run_hermes_mission(task: str, chat_id: int, bot_token: str):
+    """Executes a multi-step autonomous agent mission in the background."""
+    send_telegram_text(bot_token, chat_id, f"🚀 *Hermes Autonomous Agent Dispatched*\n\n*Mission:* {task}\n_Working in background..._")
+    
+    system_prompt = (
+        "You are Hermes, an elite autonomous research, coding & business execution agent working for AANVYA.\n"
+        "Your mission is to independently investigate, plan, search, write deliverables, or create code/images for the user.\n"
+        "Available actions in your response:\n"
+        "1. `SEARCH: <query>` — To perform live web research\n"
+        "2. `WRITE_FILE: <filename>|||<content>` — To save reports, code, landing pages, or data\n"
+        "3. `IMAGE: <prompt>` — To generate a photorealistic visual asset\n"
+        "4. `ACTION: FINISH <summary>` — When your mission is completely achieved."
+    )
+    
+    history = [f"MISSION: {task}"]
+    max_steps = 6
+    deliverables = []
+    
+    for step in range(1, max_steps + 1):
+        prompt = system_prompt + "\n\n" + "\n".join(history) + f"\n\nStep {step}/{max_steps}:"
+        resp = call_gemini(prompt)
+        
+        if "ACTION: FINISH" in resp or "ACTION:FINISH" in resp:
+            summary = resp.split("FINISH")[-1].strip(": \n")
+            send_telegram_text(bot_token, chat_id, f"✅ *Hermes Mission Completed!*\n\n{summary}")
+            return
+        
+        if "IMAGE:" in resp:
+            m = re.search(r"IMAGE:\s*(.+)", resp)
+            if m:
+                img_prompt = m.group(1).split("\n")[0].strip()
+                img_path = generate_flux_image(img_prompt)
+                if img_path:
+                    send_telegram_photo(bot_token, chat_id, img_path, caption=f"🎨 *Hermes Generated Image:* {img_prompt[:100]}")
+                    history.append(f"STEP_{step}: Generated image for '{img_prompt}'")
+                    continue
+
+        if "WRITE_FILE:" in resp:
+            m = re.search(r"WRITE_FILE:\s*([^|\n]+)\|\|\|(.*)", resp, re.DOTALL)
+            if m:
+                fname = m.group(1).strip()
+                content = m.group(2).strip()
+                content = re.sub(r"^```[a-zA-Z]*\n?", "", content)
+                content = re.sub(r"\n?```$", "", content)
+                fpath = DELIVERABLES_PATH / fname
+                fpath.write_text(content, encoding="utf-8")
+                deliverables.append(fpath)
+                history.append(f"STEP_{step}: Wrote {fname}")
+                send_telegram_text(bot_token, chat_id, f"📝 *Hermes Created Deliverable:* `{fname}`")
+                continue
+                
+        if "SEARCH:" in resp:
+            m = re.search(r"SEARCH:\s*(.+)", resp)
+            if m:
+                q = m.group(1).split("\n")[0].strip()
+                res = hermes_web_search(q)
+                history.append(f"STEP_{step}: Searched '{q}'\nRESULTS:\n{res}")
+                continue
+                
+        if step == max_steps or len(resp) > 200:
+            report_path = DELIVERABLES_PATH / f"Hermes_Report_{int(time.time())}.md"
+            report_path.write_text(resp, encoding="utf-8")
+            deliverables.append(report_path)
+            send_telegram_text(bot_token, chat_id, f"✅ *Hermes Finished Mission*\n\n{resp[:3000]}")
+            break
+
+# ── Autonomous Business & Moneymaking Idea Generator ─────────────────────────
+
+def generate_business_ventures(focus_area: str = "AI Automation & Lead Generation") -> str:
+    """Generates lucrative, actionable, high-margin business ideas that AANVYA and Hermes can automate."""
+    prompt = f"""Generate 3 highly lucrative, ultra-practical AI Automation Business models specifically tailored for Rishi (AI Agency Founder).
+For each business idea:
+1. 💡 **Business Concept & Monetization** (What service is sold and typical pricing, e.g. $500 - $3,000/mo)
+2. 🤖 **How AANVYA & Hermes Automate It 100%** (Lead scraping from Google Maps, instant tailored demo website creation, automated outreach)
+3. 🚀 **Immediate Action Step to Start Right Now** (The exact prompt to dispatch Hermes to build the first batch of client leads or prototype)
+
+Keep it razor-sharp, realistic, high-margin, and inspiring. Focus area: {focus_area}"""
+    
+    return call_gemini(prompt, system_instruction="You are AANVYA, an elite business strategist and AI agency architect.")
+
+# ── Background Cron Scheduler ────────────────────────────────────────────────
+
+def run_cron_scheduler():
+    """Autonomous background scheduler for daily briefings and intelligence tasks."""
+    token = get_telegram_token()
+    if not token:
+        return
+    
+    logger.info("Autonomous Cron Scheduler thread active.")
+    last_briefing_date = None
+    
+    while True:
+        try:
+            now = datetime.datetime.now()
+            today_str = now.strftime("%Y-%m-%d")
+            allowed_chats = get_allowed_chats()
+            
+            # Daily Morning Briefing at 08:30 AM
+            if now.hour == 8 and now.minute == 30 and last_briefing_date != today_str:
+                last_briefing_date = today_str
+                for cid in allowed_chats:
+                    mem_context = ""
+                    if memory_manager:
+                        mem = memory_manager.load_memory()
+                        mem_context = memory_manager.format_memory_for_prompt(mem)
+                    
+                    prompt = f"Deliver an inspiring, high-energy morning briefing for Rishi covering global tech highlights, agency monetization goals, and a sharp mindset tip.\n\n{mem_context}"
+                    briefing = call_gemini(prompt)
+                    send_telegram_text(token, cid, f"🌅 *Scheduled Morning Intelligence Briefing*\n\n{briefing}")
+            
+            time.sleep(45)
+        except Exception as e:
+            logger.error(f"Cron scheduler error: {e}")
+            time.sleep(60)
 
 # ── Telegram Long Polling Loop ───────────────────────────────────────────────
 
 def run_telegram_loop():
+    global VOICE_MODE_ENABLED
     token = get_telegram_token()
     if not token:
         logger.error("No Telegram Bot Token found in config/api_keys.json!")
         return
 
-    logger.info("Starting 24/7 Telegram Long-Poll Engine with Unified Memory & Gemini 2.5...")
+    logger.info("Starting 24/7 Telegram Engine (Gemini 3.x + FLUX.1 + Voice + Cron + Hermes)...")
     offset = None
+    
+    # Start Cron Scheduler in background thread
+    cron_thread = threading.Thread(target=run_cron_scheduler, daemon=True, name="CronScheduler")
+    cron_thread.start()
     
     while True:
         try:
@@ -319,42 +441,81 @@ def run_telegram_loop():
                 
                 if chat_id not in allowed_chats:
                     add_allowed_chat(chat_id)
-                    send_telegram(token, chat_id, f"🎉 *Phone Paired Successfully!*\nWelcome {from_user}! I am *AANVYA*, your 24/7 Cloud Assistant with Unified Memory & Hermes.\n\nType `/help` to see all capabilities!")
+                    send_telegram_text(token, chat_id, f"🎉 *Phone Paired Successfully!*\nWelcome {from_user}! I am *AANVYA*, your 24/7 Cloud Assistant with FLUX.1 Image Gen, Voice Notes & Hermes.\n\nType `/help` to see all capabilities!")
                 
-                # Handle Commands
+                # ── Commands ────────────────────────────────────────────────
                 if text == "/start" or text == "/help":
                     help_text = (
-                        "🤖 *AANVYA 24/7 Cloud Intelligence (Unified Memory)*\n\n"
+                        "🤖 *AANVYA 24/7 Cloud Intelligence & Business Engine*\n\n"
                         "• Text me anything for instant answers\n"
-                        "• `/sys` — Live VPS Hardware & Uptime Telemetry\n"
-                        "• `/hermes <task>` — Dispatch Hermes Autonomous Agent\n"
-                        "• `/brief` — Run your daily morning briefing\n"
-                        "• `/memory` — View everything AANVYA remembers about you\n"
-                        "• `/remember <fact>` — Store a permanent fact into memory\n\n"
+                        "• `/image <prompt>` — 🎨 Generate photorealistic FLUX.1 AI images\n"
+                        "• `/voice <text>` — 🎙️ Get an instant spoken voice audio note\n"
+                        "• `/voicemode` — 🔊 Toggle automatic voice notes ON/OFF\n"
+                        "• `/ideas` — 💡 Generate automated AI Agency business ventures\n"
+                        "• `/hermes <task>` — 🚀 Dispatch Hermes Autonomous Agent\n"
+                        "• `/brief` — 🌅 Run your personalized daily morning briefing\n"
+                        "• `/memory` — 🧠 View stored long-term memory & founder goals\n"
+                        "• `/remember <fact>` — 📌 Store a permanent fact into memory\n"
+                        "• `/sys` — 🖥️ Live VPS Hardware & Uptime Telemetry\n\n"
                         "💡 *Examples:*\n"
-                        "- _'/remember I am launching an AI product'_\n"
-                        "- _'/hermes Research top 5 AI startups in 2026'_\n"
-                        "- _'Summarize the latest breakthroughs in fusion energy'_"
+                        "- _'/image Futuristic cybernetic supercar on a rainy Tokyo street'_\n"
+                        "- _'/ideas High ticket b2b lead automation'_\n"
+                        "- _'/hermes Scrape top 5 dental clinics in Frankfurt and write a website pitch'_"
                     )
-                    send_telegram(token, chat_id, help_text)
+                    send_telegram_text(token, chat_id, help_text)
                     continue
                 
                 if text == "/sys":
-                    send_telegram(token, chat_id, get_system_stats())
+                    send_telegram_text(token, chat_id, get_system_stats())
+                    continue
+                
+                if text == "/voicemode":
+                    VOICE_MODE_ENABLED = not VOICE_MODE_ENABLED
+                    status = "🔊 ON (I will send audio voice notes with text)" if VOICE_MODE_ENABLED else "🔇 OFF (Text only)"
+                    send_telegram_text(token, chat_id, f"Voice Mode is now *{status}*.")
+                    continue
+                
+                if text.startswith("/voice "):
+                    v_text = text.replace("/voice ", "").strip()
+                    if v_text:
+                        send_telegram_text(token, chat_id, "🎙️ _Recording voice note..._")
+                        audio = generate_voice_note(v_text)
+                        if audio:
+                            send_telegram_voice(token, chat_id, audio, caption=v_text[:100])
+                        else:
+                            send_telegram_text(token, chat_id, "⚠️ Voice synthesis failed.")
+                    continue
+
+                if text.startswith("/image "):
+                    img_prompt = text.replace("/image ", "").strip()
+                    if img_prompt:
+                        send_telegram_text(token, chat_id, f"🎨 *Generating FLUX.1 Image:*\n_{img_prompt}_\n_Rendering high-definition visual..._")
+                        img_path = generate_flux_image(img_prompt)
+                        if img_path:
+                            send_telegram_photo(token, chat_id, img_path, caption=f"✨ *FLUX.1 Render:* {img_prompt}")
+                        else:
+                            send_telegram_text(token, chat_id, "⚠️ Image generation failed. Please try again.")
+                    continue
+                
+                if text == "/ideas" or text.startswith("/ideas ") or text == "/venture":
+                    focus = text.replace("/ideas", "").replace("/venture", "").strip() or "AI Agency Automation & Lead Generation"
+                    send_telegram_text(token, chat_id, f"💡 *Generating High-Margin Automated Business Models for Rishi...*\n_Analyzing market opportunities in: {focus}_")
+                    ideas = generate_business_ventures(focus)
+                    send_telegram_text(token, chat_id, ideas)
                     continue
                 
                 if text == "/memory":
                     if memory_manager:
                         entries = memory_manager.all_entries_for_ui()
                         if not entries:
-                            send_telegram(token, chat_id, "🧠 *Memory is currently empty.* Tell me facts or use `/remember <fact>` to store them!")
+                            send_telegram_text(token, chat_id, "🧠 *Memory is currently empty.* Use `/remember <fact>` to store personal notes!")
                         else:
                             lines = ["🧠 *AANVYA Unified Long-Term Memory:*"]
                             for e in entries[:15]:
                                 lines.append(f"• *{e['category'].title()} ({e['key']}):* {e['value']}")
-                            send_telegram(token, chat_id, "\n".join(lines))
+                            send_telegram_text(token, chat_id, "\n".join(lines))
                     else:
-                        send_telegram(token, chat_id, "🧠 Memory manager module not available.")
+                        send_telegram_text(token, chat_id, "🧠 Memory manager module not available.")
                     continue
                 
                 if text.startswith("/remember "):
@@ -362,9 +523,9 @@ def run_telegram_loop():
                     if fact:
                         if memory_manager:
                             memory_manager.remember("user_note", fact, category="notes")
-                            send_telegram(token, chat_id, f"🧠 *Remembered:* {fact}")
+                            send_telegram_text(token, chat_id, f"🧠 *Remembered:* {fact}")
                         else:
-                            send_telegram(token, chat_id, "🧠 Memory manager module not active.")
+                            send_telegram_text(token, chat_id, "🧠 Memory manager module not active.")
                     continue
                 
                 if text.startswith("/hermes "):
@@ -378,27 +539,47 @@ def run_telegram_loop():
                     if memory_manager:
                         mem = memory_manager.load_memory()
                         mem_context = memory_manager.format_memory_for_prompt(mem)
-                    prompt = f"Provide a crisp, energetic morning briefing for Rishi covering key highlights, motivation, and productivity tips.\n\n{mem_context}"
+                    prompt = f"Provide a crisp, energetic morning briefing for Rishi covering key highlights, motivation, and agency monetization focus.\n\n{mem_context}"
                     reply = call_gemini(prompt, system_instruction="You are AANVYA, an elite personal intelligence companion.")
-                    send_telegram(token, chat_id, f"🌅 *Morning Intelligence Briefing*\n\n{reply}")
+                    send_telegram_text(token, chat_id, f"🌅 *Morning Intelligence Briefing*\n\n{reply}")
+                    if VOICE_MODE_ENABLED:
+                        audio = generate_voice_note(reply)
+                        if audio:
+                            send_telegram_voice(token, chat_id, audio)
                     continue
                 
-                # General Conversational & Agentic Queries
+                # ── General Conversational & Agentic Triggers ────────────────
                 if text:
+                    # Check for image generation request in natural speech
+                    if any(text.lower().startswith(k) for k in ["generate an image of", "create an image of", "draw a picture of", "make an image of", "image of "]):
+                        clean_p = re.sub(r"^(generate an image of|create an image of|draw a picture of|make an image of|image of)\s*", "", text, flags=re.IGNORECASE)
+                        send_telegram_text(token, chat_id, f"🎨 *Generating FLUX.1 Image:*\n_{clean_p}_\n_Rendering high-definition visual..._")
+                        img_path = generate_flux_image(clean_p)
+                        if img_path:
+                            send_telegram_photo(token, chat_id, img_path, caption=f"✨ *FLUX.1 Render:* {clean_p}")
+                        else:
+                            send_telegram_text(token, chat_id, "⚠️ Image generation failed.")
+                        continue
+                    
                     mem_context = ""
                     if memory_manager:
                         mem = memory_manager.load_memory()
                         mem_context = memory_manager.format_memory_for_prompt(mem)
                     
                     if any(k in text.lower() for k in ["research in depth", "build an app", "create a project", "scrape", "autonomous task"]):
-                        send_telegram(token, chat_id, "🤖 *Dispatching Hermes Autonomous Agent for deep execution...*")
+                        send_telegram_text(token, chat_id, "🤖 *Dispatching Hermes Autonomous Agent for deep execution...*")
                         t = threading.Thread(target=run_hermes_mission, args=(text, chat_id, token), daemon=True)
                         t.start()
                         continue
                     
                     full_prompt = f"{mem_context}\n\nUser Query: {text}" if mem_context else text
                     reply = call_gemini(full_prompt)
-                    send_telegram(token, chat_id, reply)
+                    send_telegram_text(token, chat_id, reply)
+                    
+                    if VOICE_MODE_ENABLED:
+                        audio = generate_voice_note(reply)
+                        if audio:
+                            send_telegram_voice(token, chat_id, audio)
                     
         except requests.exceptions.ReadTimeout:
             continue
@@ -410,5 +591,5 @@ def run_telegram_loop():
             time.sleep(2)
 
 if __name__ == "__main__":
-    logger.info("=== Starting AANVYA 24/7 Cloud Assistant ===")
+    logger.info("=== Starting AANVYA 24/7 Cloud Assistant & Business Engine ===")
     run_telegram_loop()
