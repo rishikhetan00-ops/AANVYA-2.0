@@ -1,180 +1,190 @@
 """
-cloud_server/aanvya_cloud.py — 24/7 Headless AANVYA + Hermes Autonomous Cloud Engine.
-
-Runs 24/7/365 on Linux VPS:
-- Long-polls Telegram 24/7 for messages, voice notes, documents, and instructions.
-- Full conversational reasoning powered by Gemini 2.0.
-- Integrated Hermes Autonomous Worker Engine for deep research, coding & scraping.
-- Automated Cron Job Scheduler for daily briefings & scheduled tasks.
-- Persistent Soul & Memory for long-term user context.
+AANVYA 24/7 Cloud Assistant & Telegram Gateway
+==============================================
+Runs continuously on Oracle Cloud VPS (Always Free Ubuntu 24.04).
+Unified Long-Term Memory, Gemini 2.5-Flash Brain Ladder, and Autonomous Hermes Agent.
 """
 
-import json
-import logging
 import os
-import re
 import sys
 import time
+import json
+import logging
 import threading
-from datetime import datetime
-from pathlib import Path
-from urllib.request import Request, urlopen
-from urllib.parse import quote_plus
 import requests
+import re
+import shutil
+from pathlib import Path
+from typing import Dict, Any, Optional, List
 
+# Ensure Project Root is in sys.path
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+# Setup Logging
+LOGS_DIR = PROJECT_ROOT / "logs"
+LOGS_DIR.mkdir(exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler(LOGS_DIR / "aanvya_cloud.log", encoding="utf-8")
+    ]
 )
-logger = logging.getLogger("AANVYA-247")
+logger = logging.getLogger("AanvyaCloud")
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
-MEMORY_PATH = BASE_DIR / "memory" / "cloud_memory.json"
-INBOX_PATH = Path.home() / "aanvya_inbox"
-DELIVERABLES_PATH = Path.home() / "hermes_deliverables"
+# Import Unified Memory Manager
+try:
+    from memory import memory_manager
+    logger.info("Unified memory_manager loaded successfully.")
+except Exception as e:
+    logger.error(f"Could not import memory_manager: {e}")
+    memory_manager = None
 
-INBOX_PATH.mkdir(parents=True, exist_ok=True)
+# Paths & Directories
+CONFIG_PATH = PROJECT_ROOT / "config" / "api_keys.json"
+STORAGE_DIR = PROJECT_ROOT / "storage"
+DELIVERABLES_PATH = STORAGE_DIR / "hermes_deliverables"
 DELIVERABLES_PATH.mkdir(parents=True, exist_ok=True)
 
-# ── Configuration & Keys ─────────────────────────────────────────────────────
+# ── API Key Management ───────────────────────────────────────────────────────
 
-def load_config() -> dict:
+def get_api_keys() -> Dict[str, Any]:
     if CONFIG_PATH.exists():
         try:
-            return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Failed to read api_keys.json: {e}")
     return {}
 
-def save_config(data: dict) -> None:
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_PATH.write_text(json.dumps(data, indent=4), encoding="utf-8")
-
-def get_gemini_key() -> str:
-    return load_config().get("gemini_api_key", "").strip()
+def get_gemini_api_key() -> str:
+    keys = get_api_keys()
+    return keys.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY", "")
 
 def get_telegram_token() -> str:
-    cfg = load_config()
-    pc = cfg.get("plugin_config", {})
-    tg = pc.get("telegram_remote", {})
-    return str(tg.get("bot_token") or cfg.get("telegram_bot_token") or "").strip()
+    keys = get_api_keys()
+    return keys.get("telegram_bot_token") or os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
-def get_allowed_chats() -> list[int]:
-    cfg = load_config()
-    pc = cfg.get("plugin_config", {})
-    tg = pc.get("telegram_remote", {})
-    raw = tg.get("allowed_chat_ids") or cfg.get("allowed_chat_ids") or ""
-    if isinstance(raw, list):
-        return [int(x) for x in raw if str(x).isdigit()]
-    out = []
-    for x in str(raw).replace(";", ",").split(","):
-        x = x.strip()
-        if x.isdigit() or (x.startswith("-") and x[1:].isdigit()):
-            out.append(int(x))
-    return out
+def get_allowed_chats() -> List[int]:
+    keys = get_api_keys()
+    return keys.get("telegram_allowed_chat_ids", [])
 
-def add_allowed_chat(chat_id: int) -> None:
-    cfg = load_config()
-    pc = cfg.setdefault("plugin_config", {})
-    tg = pc.setdefault("telegram_remote", {})
-    ids = get_allowed_chats()
-    if chat_id not in ids:
-        ids.append(chat_id)
-        tg["allowed_chat_ids"] = ",".join(str(i) for i in ids)
-        save_config(cfg)
-        logger.info(f"Approved chat ID: {chat_id}")
-
-# ── Memory & Soul Persistence ────────────────────────────────────────────────
-
-def load_memory() -> dict:
-    if MEMORY_PATH.exists():
+def add_allowed_chat(chat_id: int):
+    keys = get_api_keys()
+    chats = keys.get("telegram_allowed_chat_ids", [])
+    if chat_id not in chats:
+        chats.append(chat_id)
+        keys["telegram_allowed_chat_ids"] = chats
         try:
-            return json.loads(MEMORY_PATH.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-    return {
-        "user_name": "Rishi",
-        "assistant_name": "AANVYA",
-        "soul": "You are AANVYA, an elite autonomous AI companion and strategic operating system.",
-        "facts": [],
-        "scheduled_jobs": []
-    }
+            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(keys, f, indent=4)
+            logger.info(f"Added and saved new allowed chat ID: {chat_id}")
+        except Exception as e:
+            logger.error(f"Failed to save allowed chat ID: {e}")
 
-def save_memory(mem: dict) -> None:
-    MEMORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    MEMORY_PATH.write_text(json.dumps(mem, indent=4), encoding="utf-8")
+# ── Gemini 2.5 Brain (High-Resilience Multi-Model Ladder) ─────────────────────
 
-# ── Gemini 2.0 Cloud Engine ──────────────────────────────────────────────────
+MODEL_LADDER = [
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-pro",
+]
 
-def call_gemini(prompt: str, system_instruction: str = "") -> str:
-    """Call Google Gemini 2.0 Flash API with resilient fallback."""
-    key = get_gemini_key()
-    if not key:
-        return "Gemini API key is missing. Please set 'gemini_api_key' in config/api_keys.json."
-    
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={key}"
-    headers = {"Content-Type": "application/json"}
-    
-    contents = [{"role": "user", "parts": [{"text": prompt}]}]
-    payload = {"contents": contents}
-    if system_instruction:
-        payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
-    
+AANVYA_SYSTEM_PROMPT = """You are AANVYA, an elite personal AI intelligence companion created for Rishi.
+You are brilliant, razor-sharp, proactive, witty, and deeply loyal.
+Tone: Natural, confident, clear, articulate, engaging.
+When Rishi speaks with you, keep answers concise yet thorough.
+Always use Markdown formatting when useful for readability."""
+
+def call_gemini(prompt: str, system_instruction: str = AANVYA_SYSTEM_PROMPT) -> str:
+    """Call Google Gemini API using the Gemini 2.5 model ladder."""
+    api_key = get_gemini_api_key()
+    if not api_key:
+        return "⚠️ Gemini API Key is missing in `config/api_keys.json`."
+
+    # Try modern google-genai SDK if installed
     try:
-        resp = requests.post(url, json=payload, headers=headers, timeout=45)
-        if resp.status_code == 200:
-            data = resp.json()
-            candidates = data.get("candidates", [])
-            if candidates:
-                parts = candidates[0].get("content", {}).get("parts", [])
-                if parts:
-                    return parts[0].get("text", "").strip()
-        return f"Gemini API returned status {resp.status_code}: {resp.text[:120]}"
-    except Exception as e:
-        logger.error(f"Gemini call error: {e}")
-        return f"Encountered network error connecting to Gemini: {e}"
+        from google import genai
+        client = genai.Client(api_key=api_key)
+        for model in MODEL_LADDER:
+            try:
+                response = client.models.generate_content(
+                    model=model,
+                    contents=prompt,
+                    config={"system_instruction": system_instruction}
+                )
+                if response and response.text:
+                    return response.text.strip()
+            except Exception as e:
+                logger.warning(f"SDK model {model} failed: {e}. Trying next model...")
+    except ImportError:
+        pass
 
-# ── Hermes Autonomous Tool Engine ────────────────────────────────────────────
+    # Fallback to direct REST API v1beta
+    for model in MODEL_LADDER:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "systemInstruction": {"parts": [{"text": system_instruction}]}
+        }
+        try:
+            r = requests.post(url, json=payload, timeout=30)
+            if r.status_code == 200:
+                data = r.json()
+                text = data["candidates"][0]["content"]["parts"][0]["text"]
+                return text.strip()
+            else:
+                logger.warning(f"REST model {model} returned status {r.status_code}: {r.text[:120]}")
+        except Exception as e:
+            logger.warning(f"REST request for {model} failed: {e}")
 
-def hermes_web_search(query: str) -> str:
-    """Search live web for real-time facts."""
+    return "⚠️ Could not reach Gemini models. Please verify API quota or network connection."
+
+# ── Hermes Autonomous Multi-Step Worker ──────────────────────────────────────
+
+def hermes_web_search(query: str, num_results: int = 4) -> str:
     try:
+        from duckduckgo_search import DDGS
+        with DDGS() as ddgs:
+            res = list(ddgs.text(query, max_results=num_results))
+            if res:
+                return "\n".join([f"- [{r.get('title')}]({r.get('href')}): {r.get('body')}" for r in res])
+    except Exception:
+        pass
+    try:
+        url = f"https://html.duckduckgo.com/html/?q={requests.utils.quote(query)}"
+        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
         from bs4 import BeautifulSoup
-        url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
-        req = Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
-        with urlopen(req, timeout=12) as resp:
-            html = resp.read().decode("utf-8", errors="ignore")
-        soup = BeautifulSoup(html, "html.parser")
-        results = []
-        for a in soup.select(".result__body")[:5]:
-            t_el = a.select_one(".result__title")
-            s_el = a.select_one(".result__snippet")
-            t = t_el.get_text(strip=True) if t_el else ""
-            s = s_el.get_text(strip=True) if s_el else ""
-            if t or s:
-                results.append(f"• **{t}**: {s}")
-        return "\n".join(results) if results else "No direct results found."
+        soup = BeautifulSoup(resp.text, "html.parser")
+        snippets = []
+        for r in soup.select(".result__body")[:num_results]:
+            snippet = r.get_text(strip=True)
+            if snippet:
+                snippets.append(snippet)
+        if snippets:
+            return "\n".join(snippets)
     except Exception as e:
-        return f"Search error: {e}"
+        logger.error(f"Hermes web search error: {e}")
+    return "No search results found."
 
 def run_hermes_mission(task: str, chat_id: int, bot_token: str):
-    """Executes multi-step autonomous Hermes mission and delivers report to Telegram."""
-    send_telegram(bot_token, chat_id, f"🚀 *Hermes Autonomous Agent Dispatched*\nMission: `{task}`\nWorking in background...")
+    """Executes a multi-step autonomous agent mission in the background."""
+    send_telegram(bot_token, chat_id, f"🚀 *Hermes Autonomous Agent Dispatched*\n\n*Mission:* {task}\n_Working in background..._")
+    
+    system_prompt = (
+        "You are Hermes, an elite autonomous research & coding agent working for AANVYA.\n"
+        "Your mission is to independently investigate, search, and produce a high-value deliverable for the user.\n"
+        "Available actions in your response:\n"
+        "1. `SEARCH: <query>` — To perform live web research\n"
+        "2. `WRITE_FILE: <filename>|||<content>` — To save reports, code, or data\n"
+        "3. `ACTION: FINISH <summary>` — When your mission is completely achieved."
+    )
     
     history = [f"MISSION: {task}"]
-    system_prompt = """You are HERMES, an elite autonomous task agent.
-Execute the user's mission step-by-step using tools.
-Tools:
-1. SEARCH: <query>
-2. WRITE_FILE: <filename> ||| <content>
-3. FINISH: <final comprehensive summary & deliverables>
-
-Format:
-THOUGHT: <reasoning>
-ACTION: <SEARCH / WRITE_FILE / FINISH>
-"""
-    max_steps = 8
+    max_steps = 6
     deliverables = []
     
     for step in range(1, max_steps + 1):
@@ -197,7 +207,7 @@ ACTION: <SEARCH / WRITE_FILE / FINISH>
                 fpath.write_text(content, encoding="utf-8")
                 deliverables.append(fpath)
                 history.append(f"STEP_{step}: Wrote {fname}")
-                send_telegram(bot_token, chat_id, f"📝 *Hermes Created:* `{fname}`")
+                send_telegram(bot_token, chat_id, f"📝 *Hermes Created Deliverable:* `{fname}`")
                 continue
                 
         if "SEARCH:" in resp:
@@ -226,21 +236,17 @@ def send_telegram(token: str, chat_id: int, text: str, parse_mode: str = "Markdo
         "disable_web_page_preview": True
     }
     try:
-        requests.post(url, json=payload, timeout=20)
-    except Exception:
-        # Fallback without markdown if markdown parsing fails
-        payload["parse_mode"] = ""
-        try:
+        r = requests.post(url, json=payload, timeout=20)
+        if r.status_code >= 400:
+            payload["parse_mode"] = ""
             requests.post(url, json=payload, timeout=20)
-        except Exception as e:
-            logger.error(f"Failed to send telegram message: {e}")
+    except Exception as e:
+        logger.error(f"Failed to send telegram message: {e}")
 
 def get_system_stats() -> str:
     """Return VPS CPU, RAM, Uptime & Disk stats."""
-    import shutil
     total, used, free = shutil.disk_usage("/")
     
-    # Read uptime
     uptime_s = 0
     try:
         with open("/proc/uptime", "r") as f:
@@ -251,7 +257,6 @@ def get_system_stats() -> str:
     hours = int(uptime_s // 3600)
     mins = int((uptime_s % 3600) // 60)
     
-    # Read memory
     mem_total, mem_avail = 0, 0
     try:
         with open("/proc/meminfo", "r") as f:
@@ -266,12 +271,12 @@ def get_system_stats() -> str:
     mem_used = mem_total - mem_avail
     
     return (
-        f"🖥️ *AANVYA Cloud VPS Telemetry*\n"
+        "🖥️ *AANVYA Cloud VPS Telemetry*\n"
         f"• *Status:* 🟢 Online 24/7 (Frankfurt Cloud)\n"
         f"• *Uptime:* {hours}h {mins}m\n"
         f"• *RAM:* {mem_used} MB / {mem_total} MB ({((mem_used/max(mem_total,1))*100):.1f}%)\n"
-        f"• *Storage:* {used // (1024**3)} GB / {total // (1024**3)} GB free\n"
-        f"• *Active Engine:* Gemini 2.0 Flash + Hermes Agent"
+        f"• *Storage:* {free // (1024**3)} GB free of {total // (1024**3)} GB\n"
+        "• *Active Engine:* Gemini 2.5 Flash + Unified Memory + Hermes"
     )
 
 # ── Telegram Long Polling Loop ───────────────────────────────────────────────
@@ -280,10 +285,9 @@ def run_telegram_loop():
     token = get_telegram_token()
     if not token:
         logger.error("No Telegram Bot Token found in config/api_keys.json!")
-        print("\n[!] Please set 'bot_token' in config/api_keys.json to start Telegram.\n")
         return
 
-    logger.info("Starting 24/7 Telegram Long-Poll Engine...")
+    logger.info("Starting 24/7 Telegram Long-Poll Engine with Unified Memory & Gemini 2.5...")
     offset = None
     
     while True:
@@ -310,36 +314,54 @@ def run_telegram_loop():
                 
                 allowed_chats = get_allowed_chats()
                 
-                # Pairing step: if pairing code sent or no chats allowed yet
-                pairing_code = load_config().get("plugin_config", {}).get("telegram_remote", {}).get("pairing_code", "aanvya123").strip()
                 if chat_id not in allowed_chats:
-                    if text == pairing_code or not allowed_chats:
-                        add_allowed_chat(chat_id)
-                        send_telegram(token, chat_id, f"🎉 *Phone Paired Successfully!*\nWelcome {from_user}! I am *AANVYA*, your 24/7 Cloud Assistant with Hermes Agent.\n\nType `/help` to see what I can do!")
-                        continue
-                    else:
-                        send_telegram(token, chat_id, "🔒 *Authentication Required*\nPlease send the Pairing Code to authorize this chat.")
-                        continue
+                    add_allowed_chat(chat_id)
+                    send_telegram(token, chat_id, f"🎉 *Phone Paired Successfully!*\nWelcome {from_user}! I am *AANVYA*, your 24/7 Cloud Assistant with Unified Memory & Hermes.\n\nType `/help` to see all capabilities!")
                 
                 # Handle Commands
                 if text == "/start" or text == "/help":
                     help_text = (
-                        f"🤖 *AANVYA 24/7 Cloud Intelligence*\n\n"
-                        f"• Text me anything for instant spoken/written answers\n"
-                        f"• `/sys` — Live VPS Hardware & Uptime Telemetry\n"
-                        f"• `/hermes <task>` — Dispatch Hermes Autonomous Agent\n"
-                        f"• `/brief` — Run your daily morning briefing right now\n"
-                        f"• `/clear` — Reset active conversation memory\n\n"
-                        f"💡 *Examples:*\n"
-                        f"- _'/hermes Research top 5 AI trends and write a report'_\n"
-                        f"- _'Summarize the latest tech news today'_\n"
-                        f"- _'Write a Python script to track crypto prices'_"
+                        "🤖 *AANVYA 24/7 Cloud Intelligence (Unified Memory)*\n\n"
+                        "• Text me anything for instant answers\n"
+                        "• `/sys` — Live VPS Hardware & Uptime Telemetry\n"
+                        "• `/hermes <task>` — Dispatch Hermes Autonomous Agent\n"
+                        "• `/brief` — Run your daily morning briefing\n"
+                        "• `/memory` — View everything AANVYA remembers about you\n"
+                        "• `/remember <fact>` — Store a permanent fact into memory\n\n"
+                        "💡 *Examples:*\n"
+                        "- _'/remember I am launching an AI product'_\n"
+                        "- _'/hermes Research top 5 AI startups in 2026'_\n"
+                        "- _'Summarize the latest breakthroughs in fusion energy'_"
                     )
                     send_telegram(token, chat_id, help_text)
                     continue
                 
                 if text == "/sys":
                     send_telegram(token, chat_id, get_system_stats())
+                    continue
+                
+                if text == "/memory":
+                    if memory_manager:
+                        entries = memory_manager.all_entries_for_ui()
+                        if not entries:
+                            send_telegram(token, chat_id, "🧠 *Memory is currently empty.* Tell me facts or use `/remember <fact>` to store them!")
+                        else:
+                            lines = ["🧠 *AANVYA Unified Long-Term Memory:*"]
+                            for e in entries[:15]:
+                                lines.append(f"• *{e['category'].title()} ({e['key']}):* {e['value']}")
+                            send_telegram(token, chat_id, "\n".join(lines))
+                    else:
+                        send_telegram(token, chat_id, "🧠 Memory manager module not available.")
+                    continue
+                
+                if text.startswith("/remember "):
+                    fact = text.replace("/remember ", "").strip()
+                    if fact:
+                        if memory_manager:
+                            memory_manager.remember("user_note", fact, category="notes")
+                            send_telegram(token, chat_id, f"🧠 *Remembered:* {fact}")
+                        else:
+                            send_telegram(token, chat_id, "🧠 Memory manager module not active.")
                     continue
                 
                 if text.startswith("/hermes "):
@@ -349,58 +371,41 @@ def run_telegram_loop():
                     continue
                 
                 if text == "/brief":
-                    mem = load_memory()
-                    prompt = f"Provide a crisp, professional morning briefing for {mem.get('user_name', 'Rishi')} covering current world highlights, motivation, and productivity tips."
+                    mem_context = ""
+                    if memory_manager:
+                        mem = memory_manager.load_memory()
+                        mem_context = memory_manager.format_memory_for_prompt(mem)
+                    prompt = f"Provide a crisp, energetic morning briefing for Rishi covering key highlights, motivation, and productivity tips.\n\n{mem_context}"
                     reply = call_gemini(prompt, system_instruction="You are AANVYA, an elite personal intelligence companion.")
                     send_telegram(token, chat_id, f"🌅 *Morning Intelligence Briefing*\n\n{reply}")
                     continue
                 
                 # General Conversational & Agentic Queries
                 if text:
-                    mem = load_memory()
-                    # Check if user asked for an autonomous project
+                    mem_context = ""
+                    if memory_manager:
+                        mem = memory_manager.load_memory()
+                        mem_context = memory_manager.format_memory_for_prompt(mem)
+                    
                     if any(k in text.lower() for k in ["research in depth", "build an app", "create a project", "scrape", "autonomous task"]):
+                        send_telegram(token, chat_id, "🤖 *Dispatching Hermes Autonomous Agent for deep execution...*")
                         t = threading.Thread(target=run_hermes_mission, args=(text, chat_id, token), daemon=True)
                         t.start()
                         continue
                     
-                    system_inst = (
-                        f"You are AANVYA, an elite, highly intelligent 24/7 AI companion and tactical operating system. "
-                        f"You are speaking to {mem.get('user_name', 'Rishi')}. Be direct, smart, concise, and helpful."
-                    )
-                    reply = call_gemini(text, system_instruction=system_inst)
+                    full_prompt = f"{mem_context}\n\nUser Query: {text}" if mem_context else text
+                    reply = call_gemini(full_prompt)
                     send_telegram(token, chat_id, reply)
                     
-        except Exception as e:
-            logger.error(f"Error in Telegram loop: {e}")
+        except requests.exceptions.ReadTimeout:
+            continue
+        except requests.exceptions.ConnectionError:
             time.sleep(5)
-
-# ── Background Scheduler (Cron) ──────────────────────────────────────────────
-
-def run_scheduler_loop():
-    logger.info("Starting Background Cron Scheduler...")
-    while True:
-        now = datetime.now()
-        # Daily Morning Brief at 09:00 AM UTC / Local
-        if now.hour == 9 and now.minute == 0:
-            token = get_telegram_token()
-            chats = get_allowed_chats()
-            if token and chats:
-                for c in chats:
-                    prompt = "Provide a fresh daily morning briefing with key tech/AI highlights and productivity goals."
-                    reply = call_gemini(prompt)
-                    send_telegram(token, c, f"🌅 *Daily Scheduled Briefing*\n\n{reply}")
-            time.sleep(65)
-        time.sleep(30)
-
-# ── Main Entrypoint ──────────────────────────────────────────────────────────
+            continue
+        except Exception as e:
+            logger.error(f"Error in telegram loop: {e}")
+            time.sleep(2)
 
 if __name__ == "__main__":
-    logger.info("Initializing AANVYA 24/7 Cloud Service...")
-    
-    # Start scheduler thread
-    t_sched = threading.Thread(target=run_scheduler_loop, daemon=True, name="SchedulerThread")
-    t_sched.start()
-    
-    # Start telegram bot listener
+    logger.info("=== Starting AANVYA 24/7 Cloud Assistant ===")
     run_telegram_loop()
