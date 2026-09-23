@@ -985,6 +985,13 @@ class JarvisLive:
 
         memory     = load_memory()
         mem_str    = format_memory_for_prompt(memory)
+        try:
+            from core.cloud_sync import get_recent_cross_device_context
+            _cross_ctx = get_recent_cross_device_context()
+            if _cross_ctx:
+                mem_str += f"\n\n[CROSS-DEVICE SYNC & TELEGRAM ACTIVITY]\n{_cross_ctx}\n"
+        except Exception:
+            pass
         sys_prompt = _load_system_prompt()
 
         now      = datetime.now()

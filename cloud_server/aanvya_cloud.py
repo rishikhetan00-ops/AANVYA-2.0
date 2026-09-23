@@ -1,6 +1,6 @@
 """
-AANVYA 24/7 Cloud Assistant & Business Automation Engine
-========================================================
+AANVYA 24/7 Cloud Assistant & Business Automation Engine (2-Way Synced)
+=======================================================================
 Runs continuously on Oracle Cloud Always Free Ubuntu VPS.
 Features:
 - Gemini Flash 3.x / Flash-Latest Brain Ladder
@@ -9,7 +9,7 @@ Features:
 - Autonomous Background Cron Scheduler (Daily briefings, Market trends)
 - Hermes Autonomous Agent (`/hermes <mission>`)
 - Autonomous Business Monetization Idea Engine (`/ideas`, `/venture`)
-- Unified Long-Term Memory & Founder Persona
+- 2-Way Real-Time Synchronization with Laptop AANVYA (`shared_activity.json`)
 """
 
 import os
@@ -59,6 +59,45 @@ DELIVERABLES_PATH = STORAGE_DIR / "hermes_deliverables"
 DELIVERABLES_PATH.mkdir(parents=True, exist_ok=True)
 MEDIA_DIR = STORAGE_DIR / "cloud_media"
 MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+SHARED_ACTIVITY_FILE = PROJECT_ROOT / "memory" / "shared_activity.json"
+
+# ── Activity Ledger for 2-Way Laptop Synchronization ─────────────────────────
+
+def record_shared_activity(activity_type: str, title: str, summary: str, source: str = "telegram_cloud", files: List[str] = None):
+    """Records an activity or deliverable on the cloud so the laptop receives it on sync."""
+    try:
+        data = {"last_sync": "", "activities": [], "unseen_on_laptop": []}
+        if SHARED_ACTIVITY_FILE.exists():
+            try:
+                data = json.loads(SHARED_ACTIVITY_FILE.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        
+        entry = {
+            "id": f"act_{int(time.time() * 1000)}",
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "source": source,
+            "type": activity_type,
+            "title": title,
+            "summary": summary[:1200],
+            "deliverable_files": files or []
+        }
+        
+        if "activities" not in data:
+            data["activities"] = []
+        if "unseen_on_laptop" not in data:
+            data["unseen_on_laptop"] = []
+            
+        data["activities"].insert(0, entry)
+        data["activities"] = data["activities"][:50]
+        data["unseen_on_laptop"].append(entry)
+        data["last_sync"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        
+        SHARED_ACTIVITY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        SHARED_ACTIVITY_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        logger.info(f"Recorded shared activity: [{activity_type}] {title}")
+    except Exception as e:
+        logger.error(f"Failed to record shared activity: {e}")
 
 # ── Configuration & Keys ─────────────────────────────────────────────────────
 
@@ -96,7 +135,6 @@ def add_allowed_chat(chat_id: int):
         except Exception as e:
             logger.error(f"Failed to save allowed chat ID: {e}")
 
-# In-memory Voice Mode Toggle (False = text only, True = text + audio voice note)
 VOICE_MODE_ENABLED = False
 
 # ── Gemini Brain Ladder ──────────────────────────────────────────────────────
@@ -112,8 +150,8 @@ MODEL_LADDER = [
 
 AANVYA_SYSTEM_PROMPT = """You are AANVYA, an elite, ultra-competent AI intelligence companion and business automation engine created for Rishi.
 You are brilliant, loyal, razor-sharp, proactive, witty, and strategic.
-You specialize in autonomous workflows: lead generation, business building, automated social media, and technical research.
-Tone: Natural, articulate, confident, encouraging, concise yet impactful."""
+You operate across Cloud (Telegram) and Desktop (Laptop) with unified continuous memory.
+Tone: Natural, articulate, confident, encouraging, concise yet thorough."""
 
 def call_gemini(prompt: str, system_instruction: str = AANVYA_SYSTEM_PROMPT) -> str:
     """Call Google Gemini API using the Gemini 3.x/Flash-Latest model ladder."""
@@ -153,6 +191,7 @@ def generate_flux_image(prompt: str, filename_prefix: str = "flux") -> Optional[
         r = requests.get(url, timeout=40)
         if r.status_code == 200 and len(r.content) > 5000:
             out_file.write_bytes(r.content)
+            record_shared_activity("image_generation", f"Image: {clean_prompt[:50]}", f"Generated FLUX image for: {clean_prompt}", files=[out_file.name])
             return out_file
     except Exception as e:
         logger.error(f"FLUX image generation error: {e}")
@@ -162,7 +201,6 @@ def generate_flux_image(prompt: str, filename_prefix: str = "flux") -> Optional[
 
 async def _synthesize_voice_async(text: str, out_path: Path, voice: str = "en-IN-NeerjaNeural"):
     import edge_tts
-    # Clean markdown formatting for smooth speech
     clean_text = re.sub(r"[*_`#~>-]", "", text).strip()
     communicate = edge_tts.Communicate(clean_text[:800], voice)
     await communicate.save(str(out_path))
@@ -182,7 +220,7 @@ def generate_voice_note(text: str, language: str = "en") -> Optional[Path]:
 # ── Telegram Protocol & Media Dispatch ───────────────────────────────────────
 
 def send_telegram_text(token: str, chat_id: int, text: str, parse_mode: str = "Markdown") -> None:
-    """Sends text message to Telegram, automatically sanitizing headers and splitting long messages (>3800 chars)."""
+    """Sends text message to Telegram, automatically converting headers and chunking long messages."""
     if not text:
         return
 
@@ -194,7 +232,6 @@ def send_telegram_text(token: str, chat_id: int, text: str, parse_mode: str = "M
     if len(formatted_text) <= 3800:
         chunks = [formatted_text]
     else:
-        # Split cleanly on paragraphs or linebreaks
         parts = formatted_text.split("\n\n")
         current_chunk = ""
         for p in parts:
@@ -218,7 +255,6 @@ def send_telegram_text(token: str, chat_id: int, text: str, parse_mode: str = "M
         try:
             r = requests.post(url, json=payload, timeout=20)
             if r.status_code >= 400:
-                # Retry with raw text without Markdown parsing if Telegram parser complained
                 payload["parse_mode"] = ""
                 requests.post(url, json=payload, timeout=20)
         except Exception as e:
@@ -278,6 +314,7 @@ def get_system_stats() -> str:
     return (
         "🖥️ *AANVYA Cloud VPS Telemetry*\n"
         f"• *Status:* 🟢 Online 24/7 (Frankfurt Cloud)\n"
+        f"• *Sync Bridge:* 🔄 2-Way Sync Active with Laptop\n"
         f"• *Uptime:* {hours}h {mins}m\n"
         f"• *RAM:* {mem_used} MB / {mem_total} MB ({((mem_used/max(mem_total,1))*100):.1f}%)\n"
         f"• *Storage:* {free // (1024**3)} GB free of {total // (1024**3)} GB\n"
@@ -336,6 +373,7 @@ def run_hermes_mission(task: str, chat_id: int, bot_token: str):
         if "ACTION: FINISH" in resp or "ACTION:FINISH" in resp:
             summary = resp.split("FINISH")[-1].strip(": \n")
             send_telegram_text(bot_token, chat_id, f"✅ *Hermes Mission Completed!*\n\n{summary}")
+            record_shared_activity("hermes_mission", f"Hermes: {task[:50]}", summary, files=[p.name for p in deliverables])
             return
         
         if "IMAGE:" in resp:
@@ -375,6 +413,7 @@ def run_hermes_mission(task: str, chat_id: int, bot_token: str):
             report_path.write_text(resp, encoding="utf-8")
             deliverables.append(report_path)
             send_telegram_text(bot_token, chat_id, f"✅ *Hermes Finished Mission*\n\n{resp[:3000]}")
+            record_shared_activity("hermes_mission", f"Hermes: {task[:50]}", resp[:1000], files=[p.name for p in deliverables])
             break
 
 # ── Autonomous Business & Moneymaking Idea Generator ─────────────────────────
@@ -389,7 +428,9 @@ For each business idea:
 
 Keep it razor-sharp, realistic, high-margin, and inspiring. Focus area: {focus_area}"""
     
-    return call_gemini(prompt, system_instruction="You are AANVYA, an elite business strategist and AI agency architect.")
+    ideas = call_gemini(prompt, system_instruction="You are AANVYA, an elite business strategist and AI agency architect.")
+    record_shared_activity("business_ideas", f"Ideas: {focus_area[:40]}", ideas[:1000])
+    return ideas
 
 # ── Background Cron Scheduler ────────────────────────────────────────────────
 
@@ -420,6 +461,7 @@ def run_cron_scheduler():
                     prompt = f"Deliver an inspiring, high-energy morning briefing for Rishi covering global tech highlights, agency monetization goals, and a sharp mindset tip.\n\n{mem_context}"
                     briefing = call_gemini(prompt)
                     send_telegram_text(token, cid, f"🌅 *Scheduled Morning Intelligence Briefing*\n\n{briefing}")
+                    record_shared_activity("daily_briefing", "Morning Briefing", briefing[:400])
             
             time.sleep(45)
         except Exception as e:
@@ -435,7 +477,7 @@ def run_telegram_loop():
         logger.error("No Telegram Bot Token found in config/api_keys.json!")
         return
 
-    logger.info("Starting 24/7 Telegram Engine (Gemini 3.x + FLUX.1 + Voice + Cron + Hermes)...")
+    logger.info("Starting 24/7 Telegram Engine (Gemini 3.x + FLUX.1 + Voice + Cron + 2-Way Sync)...")
     offset = None
     
     # Start Cron Scheduler in background thread
@@ -468,7 +510,7 @@ def run_telegram_loop():
                 
                 if chat_id not in allowed_chats:
                     add_allowed_chat(chat_id)
-                    send_telegram_text(token, chat_id, f"🎉 *Phone Paired Successfully!*\nWelcome {from_user}! I am *AANVYA*, your 24/7 Cloud Assistant with FLUX.1 Image Gen, Voice Notes & Hermes.\n\nType `/help` to see all capabilities!")
+                    send_telegram_text(token, chat_id, f"🎉 *Phone Paired Successfully!*\nWelcome {from_user}! I am *AANVYA*, your 24/7 Cloud Assistant with FLUX.1 Image Gen, Voice Notes & 2-Way Laptop Sync.\n\nType `/help` to see all capabilities!")
                 
                 # ── Commands ────────────────────────────────────────────────
                 if text == "/start" or text == "/help":
@@ -483,7 +525,7 @@ def run_telegram_loop():
                         "• `/brief` — 🌅 Run your personalized daily morning briefing\n"
                         "• `/memory` — 🧠 View stored long-term memory & founder goals\n"
                         "• `/remember <fact>` — 📌 Store a permanent fact into memory\n"
-                        "• `/sys` — 🖥️ Live VPS Hardware & Uptime Telemetry\n\n"
+                        "• `/sys` — 🖥️ Live VPS Hardware, Uptime & Sync Telemetry\n\n"
                         "💡 *Examples:*\n"
                         "- _'/image Futuristic cybernetic supercar on a rainy Tokyo street'_\n"
                         "- _'/ideas High ticket b2b lead automation'_\n"
@@ -551,6 +593,7 @@ def run_telegram_loop():
                         if memory_manager:
                             memory_manager.remember("user_note", fact, category="notes")
                             send_telegram_text(token, chat_id, f"🧠 *Remembered:* {fact}")
+                            record_shared_activity("memory_update", f"Remembered: {fact[:40]}", fact)
                         else:
                             send_telegram_text(token, chat_id, "🧠 Memory manager module not active.")
                     continue
@@ -569,6 +612,7 @@ def run_telegram_loop():
                     prompt = f"Provide a crisp, energetic morning briefing for Rishi covering key highlights, motivation, and agency monetization focus.\n\n{mem_context}"
                     reply = call_gemini(prompt, system_instruction="You are AANVYA, an elite personal intelligence companion.")
                     send_telegram_text(token, chat_id, f"🌅 *Morning Intelligence Briefing*\n\n{reply}")
+                    record_shared_activity("daily_briefing", "Morning Briefing", reply[:400])
                     if VOICE_MODE_ENABLED:
                         audio = generate_voice_note(reply)
                         if audio:
@@ -577,7 +621,6 @@ def run_telegram_loop():
                 
                 # ── General Conversational & Agentic Triggers ────────────────
                 if text:
-                    # Check for image generation request in natural speech
                     if any(text.lower().startswith(k) for k in ["generate an image of", "create an image of", "draw a picture of", "make an image of", "image of "]):
                         clean_p = re.sub(r"^(generate an image of|create an image of|draw a picture of|make an image of|image of)\s*", "", text, flags=re.IGNORECASE)
                         send_telegram_text(token, chat_id, f"🎨 *Generating FLUX.1 Image:*\n_{clean_p}_\n_Rendering high-definition visual..._")
@@ -602,6 +645,7 @@ def run_telegram_loop():
                     full_prompt = f"{mem_context}\n\nUser Query: {text}" if mem_context else text
                     reply = call_gemini(full_prompt)
                     send_telegram_text(token, chat_id, reply)
+                    record_shared_activity("conversation", f"Chat: {text[:40]}", reply[:400])
                     
                     if VOICE_MODE_ENABLED:
                         audio = generate_voice_note(reply)
@@ -618,5 +662,5 @@ def run_telegram_loop():
             time.sleep(2)
 
 if __name__ == "__main__":
-    logger.info("=== Starting AANVYA 24/7 Cloud Assistant & Business Engine ===")
+    logger.info("=== Starting AANVYA 24/7 Cloud Assistant & Business Engine (2-Way Synced) ===")
     run_telegram_loop()
