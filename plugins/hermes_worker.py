@@ -1,189 +1,178 @@
 """
-plugins/hermes_worker.py — Autonomous Background Agent for Laptop AANVYA
-========================================================================
-Fixed & Enhanced:
-- Correctly extracts response.text from gemini._Reply objects
-- Direct high-speed FLUX.1 generation for image requests
-- Saves images to Desktop/Hermes_Output/ and Desktop/ directly
-- Automatically forwards generated image to Telegram
-- Announces completion via voice
+Hermes Autonomous Agent Worker Plugin for AANVYA (Desktop Engine)
+==================================================================
+Runs real-world tasks in background threads on Windows laptop.
+- Fast Path for FLUX.1 Images (Auto-saved to Desktop/Hermes_Output & Telegram synced)
+- Fast Path for 21st.dev / Aceternity 3D Single-File Websites (Auto-saved to index.html & Auto-opened in Brave)
+- Full Bash / Terminal Execution & Web Search Tools
+- Zero Speculative Planning (Direct Code & Deliverable Generation)
 """
 
+import os
+import sys
+import time
 import json
 import logging
-import os
-import re
-import shutil
 import threading
-import time
+import subprocess
 import requests
+import re
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Any, Optional, List
 
+# Core Gemini & Memory
 from core import gemini
-from memory.config_manager import get_plugin_config
 
-logger = logging.getLogger("AANVYA.Hermes")
-
+logger = logging.getLogger("HermesWorker")
 _NS = "hermes_worker"
-_DEFAULT_OUT = Path.home() / "Desktop" / "Hermes_Output"
 
-PLUGIN_SETTINGS = {
-    "namespace": _NS,
-    "title": "🧠  HERMES AUTONOMOUS AGENT",
-    "fields": [
-        {"key": "output_dir", "label": "Deliverables Output Folder", "type": "text",
-         "placeholder": "Default = Desktop/Hermes_Output"},
-        {"key": "max_steps", "label": "Max Autonomous Steps Per Mission", "type": "text",
-         "placeholder": "Default = 8"},
-        {"key": "notify_voice", "label": "Announce out loud when mission finishes",
-         "type": "toggle", "default": True},
-    ],
-}
+# Output directory on Desktop
+_DESKTOP = Path(os.environ.get("USERPROFILE", "C:\\Users\\BIT")) / "Desktop"
+_DEFAULT_OUT = _DESKTOP / "Hermes_Output"
+_DEFAULT_OUT.mkdir(parents=True, exist_ok=True)
 
-PLUGIN = {
-    "name": "hermes_worker",
-    "description": (
-        "Dispatches an autonomous background worker (Hermes Agent) to perform "
-        "tasks, such as generating photorealistic images, writing code, creating documents, "
-        "doing deep web research, or scraping data. Call this whenever the user asks to "
-        "'generate an image of...', 'create a picture of...', 'build an app for...', "
-        "'research in depth and write a report on...', 'scrape data for...'."
-    ),
-    "parameters": {
-        "type": "OBJECT",
-        "properties": {
-            "task": {
-                "type": "STRING",
-                "description": "The exact goal, prompt, or project description for the agent"
-            },
-            "output_format": {
-                "type": "STRING",
-                "description": "Optional deliverable type (e.g. 'flux_image', 'markdown_report', 'python_project')"
-            },
-            "send_to_telegram": {
-                "type": "BOOLEAN",
-                "description": "Whether to send a copy of the deliverable/image to user's Telegram phone"
-            }
-        },
-        "required": ["task"],
-    },
-}
+HERMES_SYSTEM_PROMPT = """You are HERMES, an elite autonomous software engineer, 21st.dev designer & intelligence operator for AANVYA.
+You have full access to tools and execute missions directly with working code and real-world deliverables.
 
-# ── Telegram Media Dispatcher ────────────────────────────────────────────────
+CRITICAL LAWS FOR WEBSITES & DELIVERABLES:
+1. 🚀 DIRECT IMMEDIATE ACTION (ZERO SPECULATIVE PLANNING):
+   • When asked to build a website, landing page, app, or tool, DO NOT waste time creating planning documents, spec outlines, or markdown brainstorms.
+   • IMMEDIATELY generate the complete, working, production code via `WRITE_FILE: index.html ||| <full complete code>`.
 
-def _send_file_to_telegram(file_path: Path, caption: str = ""):
-    """Sends photo or document directly to paired Telegram user."""
+2. 📱 FULL MOBILE RESPONSIVENESS & TOUCH OPTIMIZATION:
+   • Every page must be flawlessly responsive on Mobile (375px–430px), Tablet (768px), and Desktop (1200px+).
+   • Responsive Typography: Use fluid scaling (`text-4xl sm:text-6xl md:text-8xl lg:text-9xl`) or `clamp()`.
+   • Responsive Grid: Use `grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 md:gap-8`.
+   • Mobile Navigation: Include a working mobile hamburger toggle with backdrop blur overlay.
+   • Touch Targets: All interactive buttons and inputs must have `min-height: 44px` with proper padding.
+   • Always include `<meta name="viewport" content="width=device-width, initial-scale=1.0">` and `overflow-x-hidden` on body.
+
+3. 🚫 ZERO JSX IN RAW HTML (PURE STATIC HTML LAW):
+   • NEVER write React/JSX syntax inside `.html` files (e.g. NEVER do `{[ {img:...} ].map(...)}` in HTML body).
+   • Write clean, complete, static semantic HTML tags.
+
+4. ⚡ ZERO DEAD JAVASCRIPT / ZERO PLACEHOLDER SCRIPTS:
+   • NEVER write comments like `// GSAP animations would be initialized here`.
+   • Every imported library (Three.js, GSAP, Lucide, Canvas) MUST have complete, working, interactive JavaScript code.
+   • Always call `lucide.createIcons()` on page load.
+   • Implement active cursor spotlight physics (`--mouse-x`, `--mouse-y`) or smooth 3D tilt calculations.
+
+5. 🚫 ZERO PLACEHOLDER BOXES:
+   • NEVER use empty gray rectangles (`bg-zinc-800`, `bg-gray-800`).
+   • ALWAYS embed real, high-resolution Unsplash photography with `auto=format&fit=crop&w=1200&q=80`.
+
+6. 🎨 21st.dev THEME TAXONOMY:
+   • Glyph Portal: Scroll-driven typography hero that opens/steps into full-bleed project case studies on scroll (using SVG clip-path / canvas / GSAP ScrollTrigger).
+   • 3D Spotlight Bento: Dark glassmorphic bento cards with cursor-following radial spotlight reflections and 3D layer pop-outs (`transform-style: preserve-3d; translateZ(35px)`).
+   • Three.js Interactive Hero: Orbiting particle starfields, rotating wireframe monoliths, or geometric meshes that respond to mouse move.
+   • Editorial Parallax: Rich photography cards with category filtering, floating badges, and smooth inquiry drawers.
+
+7. 📦 DELIVERABLE FORMAT:
+   • For websites, ALWAYS create a COMPLETE, 250+ LINE, 100% SELF-CONTAINED `index.html` with Tailwind CDN, Google Fonts, Lucide icons, Three.js, and GSAP.
+   • Output via `WRITE_FILE: index.html ||| <full complete html>`.
+
+Available Tools:
+1. `BASH: <windows/powershell command>` — Execute terminal commands, run python scripts, test code
+2. `SEARCH: <query>` — Search live web for data, news, docs, pricing
+3. `WRITE_FILE: <filename> ||| <content>` — Write code, scripts, or self-contained HTML landing pages
+4. `IMAGE: <prompt>` — Generate photorealistic FLUX.1 image
+5. `ACTION: FINISH: <summary>` — Conclude mission when deliverables are saved
+
+Format:
+THOUGHT: <your reasoning>
+ACTION: <tool call>"""
+
+def get_plugin_config(namespace: str) -> Dict[str, Any]:
+    return {}
+
+def _get_api_keys() -> Dict[str, Any]:
     try:
-        cfg_path = Path(__file__).resolve().parent.parent / "config" / "api_keys.json"
-        if not cfg_path.exists():
-            logger.warning(f"Config path {cfg_path} does not exist.")
-            return
-        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-        token = cfg.get("telegram_bot_token") or cfg.get("plugin_config", {}).get("telegram_remote", {}).get("bot_token")
-        
-        # Robustly resolve chat IDs from all possible config fields
-        raw_chats = cfg.get("telegram_allowed_chat_ids") or cfg.get("plugin_config", {}).get("telegram_remote", {}).get("allowed_chat_ids") or []
-        chat_ids = []
-        if isinstance(raw_chats, int):
-            chat_ids = [raw_chats]
-        elif isinstance(raw_chats, str):
-            chat_ids = [int(x.strip()) for x in raw_chats.split(",") if x.strip().isdigit()]
-        elif isinstance(raw_chats, list):
-            chat_ids = [int(x) for x in raw_chats if str(x).isdigit()]
+        keys_path = Path(__file__).resolve().parent.parent / "config" / "api_keys.json"
+        if keys_path.exists():
+            with open(keys_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
 
-        if not token or not chat_ids:
-            logger.warning(f"Cannot forward to Telegram: token={bool(token)}, chat_ids={chat_ids}")
-            return
+def _send_telegram_photo(photo_path: Path, caption: str = ""):
+    keys = _get_api_keys()
+    bot_token = keys.get("telegram_bot_token") or os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    chat_ids = keys.get("telegram_allowed_chat_ids", [])
+    if not chat_ids and keys.get("telegram_chat_id"):
+        chat_ids = [keys.get("telegram_chat_id")]
+    if not chat_ids:
+        chat_ids = [936014573]
 
-        is_image = file_path.suffix.lower() in [".jpg", ".jpeg", ".png", ".webp"]
-        endpoint = "sendPhoto" if is_image else "sendDocument"
-        field_name = "photo" if is_image else "document"
+    if not bot_token:
+        return
 
-        for cid in chat_ids:
-            with open(file_path, "rb") as f:
-                r = requests.post(
-                    f"https://api.telegram.org/bot{token}/{endpoint}",
-                    data={"chat_id": cid, "caption": caption[:1024], "parse_mode": "Markdown"},
-                    files={field_name: f},
-                    timeout=25
-                )
-                logger.info(f"Telegram dispatch status for {file_path.name}: {r.status_code}")
-    except Exception as e:
-        logger.error(f"Failed to send deliverable to Telegram: {e}")
+    url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
+    for cid in chat_ids:
+        try:
+            with open(photo_path, "rb") as f:
+                files = {"photo": f}
+                data = {"chat_id": cid, "caption": caption[:1024]}
+                requests.post(url, data=data, files=files, timeout=25)
+        except Exception:
+            pass
 
-# ── Toolset for Hermes Agent ─────────────────────────────────────────────────
+def _send_telegram_document(doc_path: Path, caption: str = ""):
+    keys = _get_api_keys()
+    bot_token = keys.get("telegram_bot_token") or os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    chat_ids = keys.get("telegram_allowed_chat_ids", [])
+    if not chat_ids and keys.get("telegram_chat_id"):
+        chat_ids = [keys.get("telegram_chat_id")]
+    if not chat_ids:
+        chat_ids = [936014573]
 
-def _web_search(query: str) -> str:
-    """Live web search via DuckDuckGo."""
+    if not bot_token:
+        return
+
+    url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
+    for cid in chat_ids:
+        try:
+            with open(doc_path, "rb") as f:
+                files = {"document": f}
+                data = {"chat_id": cid, "caption": caption[:1024]}
+                requests.post(url, data=data, files=files, timeout=35)
+        except Exception:
+            pass
+
+def _generate_flux_image(out_dir: Path, prompt: str) -> Optional[Path]:
+    clean_p = re.sub(r"[^\w\s,-]", "", prompt).strip()
+    encoded = requests.utils.quote(clean_p)
+    url = f"https://image.pollinations.ai/prompt/{encoded}?model=flux&width=1024&height=1024&nologo=true&seed={int(time.time())}"
+    
+    out_file = out_dir / f"Hermes_FLUX_{int(time.time())}.jpg"
     try:
-        from urllib.request import Request, urlopen
-        from urllib.parse import quote_plus
-        from bs4 import BeautifulSoup
-        
-        url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
-        req = Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
-        with urlopen(req, timeout=10) as resp:
-            html = resp.read().decode("utf-8", errors="ignore")
-        
-        soup = BeautifulSoup(html, "html.parser")
-        results = []
-        for a in soup.select(".result__body")[:5]:
-            title = a.select_one(".result__title")
-            snippet = a.select_one(".result__snippet")
-            t = title.get_text(strip=True) if title else ""
-            s = snippet.get_text(strip=True) if snippet else ""
-            if t or s:
-                results.append(f"- **{t}**: {s}")
-        return "\n".join(results) if results else "No direct results found."
-    except Exception as e:
-        return f"Search error: {e}"
-
-def _generate_flux_image(out_dir: Path, prompt: str, filename_override: str = None) -> Optional[Path]:
-    """Generates a FLUX.1 photorealistic image and saves it to output dir & Desktop."""
-    try:
-        clean_p = re.sub(r"[^\w\s,-]", "", prompt).strip()
-        encoded = requests.utils.quote(clean_p)
-        url = f"https://image.pollinations.ai/prompt/{encoded}?model=flux&width=1024&height=1024&nologo=true&seed={int(time.time())}"
-        
-        fname = filename_override or f"Hermes_Image_{int(time.time())}.jpg"
-        if not fname.endswith((".jpg", ".png", ".jpeg")):
-            fname += ".jpg"
-            
-        out_file = out_dir / fname
         r = requests.get(url, timeout=40)
         if r.status_code == 200 and len(r.content) > 5000:
             out_file.write_bytes(r.content)
-            
-            # Only save directly to Desktop root if explicitly requested in prompt
-            if "save to desktop" in prompt.lower() or "on my desktop" in prompt.lower() and "hermes_output" not in prompt.lower():
-                desktop_copy = Path.home() / "Desktop" / fname
-                try:
-                    shutil.copy2(out_file, desktop_copy)
-                except Exception:
-                    pass
-                
-            # Forward directly to Telegram
-            _send_file_to_telegram(out_file, caption=f"🎨 *Generated Image for Rishi:*\n_{clean_p}_")
+            _send_telegram_photo(out_file, caption=f"🎨 *Hermes FLUX Render:* {clean_p[:100]}")
             return out_file
     except Exception as e:
-        logger.error(f"FLUX image generation error: {e}")
+        logger.error(f"FLUX generation error: {e}")
     return None
 
-def _write_file(out_dir: Path, rel_path: str, content: str) -> str:
-    """Safely write a deliverable file to the project output folder."""
+def _open_file_in_browser(file_path: Path):
+    """Opens an HTML file directly in the user's Brave or default browser."""
+    brave_paths = [
+        Path(r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe"),
+        Path(r"C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe"),
+        Path(os.environ.get("LOCALAPPDATA", "")) / "BraveSoftware" / "Brave-Browser" / "Application" / "brave.exe"
+    ]
+    brave_bin = next((p for p in brave_paths if p.exists()), None)
     try:
-        dest = (out_dir / rel_path).resolve()
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(content, encoding="utf-8")
-        return f"Successfully created file: {dest.name} ({len(content)} bytes)"
+        if brave_bin:
+            subprocess.Popen([str(brave_bin), f"file:///{file_path.resolve()}"])
+        else:
+            subprocess.Popen(["cmd", "/c", "start", "", str(file_path.resolve())])
     except Exception as e:
-        return f"File write error: {e}"
-
-# ── Autonomous Worker Thread ─────────────────────────────────────────────────
+        logger.error(f"Could not open browser: {e}")
 
 def _run_hermes_mission(task: str, output_format: str, player, out_dir: Path, max_steps: int, notify: bool):
-    """Executes the Hermes execution loop."""
+    """Executes the Hermes execution loop on Laptop."""
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
         if player:
@@ -192,87 +181,104 @@ def _run_hermes_mission(task: str, output_format: str, player, out_dir: Path, ma
             except Exception:
                 pass
 
-        # ── Fast Path: If task is directly asking for an image ───────────────
+        # ── Fast Path 1: Image Request ───────────────────────────────────────
         is_image_req = any(k in task.lower() for k in ["image", "photo", "picture", "draw", "render", "wallpaper", "logo", "illustration"])
         if is_image_req or output_format == "flux_image":
             if player:
                 try:
-                    player.write_log(f"HERMES: Rendering FLUX.1 image for prompt: '{task[:50]}'...")
+                    player.write_log(f"HERMES: Rendering FLUX.1 image for: '{task[:50]}'...")
                 except Exception:
                     pass
             
             img_file = _generate_flux_image(out_dir, task)
             if img_file:
-                msg = f"HERMES: Image generated successfully ({img_file.name}) and saved to Desktop & Telegram!"
                 if player:
                     try:
-                        player.write_log(msg)
+                        player.write_log(f"HERMES: Image saved to {img_file.name}")
                         if notify:
                             say_fn = getattr(player, "request_say", None)
                             if callable(say_fn):
-                                say_fn("Rishi, aapki image generate ho gayi hai. Maine ise aapke Desktop par save kar diya hai aur aapke Telegram par bhi bhej diya hai.")
+                                say_fn("Rishi, aapki image ready hai. Desktop aur Telegram par bhej di hai.")
+                    except Exception:
+                        pass
+                return
+
+        # ── Fast Path 2: Website / Landing Page Direct Builder ───────────────
+        is_web_req = any(k in task.lower() for k in ["website", "landing page", "web page", "web site", "portfolio", "site for", "make a site", "build a site", "create a site", "html", "glyph portal", "21st.dev"])
+        if is_web_req or output_format == "html":
+            if player:
+                try:
+                    player.write_log(f"HERMES: Building 21st.dev single-file website for '{task[:50]}'...")
+                except Exception:
+                    pass
+            
+            web_prompt = f"""{HERMES_SYSTEM_PROMPT}
+
+USER REQUEST: {task}
+
+TASK: Build a complete, production-ready, self-contained `index.html` file right now.
+Do NOT write any planning markdown, outline, or conversational explanation.
+Respond ONLY with the complete HTML code starting with `WRITE_FILE: index.html ||| <!DOCTYPE html>`."""
+
+            try:
+                resp = gemini.call(web_prompt, tier=gemini.FAST, timeout_ms=45000)
+                resp_text = getattr(resp, "text", None) or str(resp or "").strip()
+            except Exception as e:
+                resp_text = ""
+
+            html_content = ""
+            if "WRITE_FILE:" in resp_text:
+                m = re.search(r"WRITE_FILE:\s*([^|\n]+)\|\|\|(.*)", resp_text, re.DOTALL)
+                if m:
+                    html_content = m.group(2).strip()
+            elif "<!DOCTYPE html>" in resp_text or "<html" in resp_text:
+                html_content = resp_text
+
+            if html_content:
+                html_content = re.sub(r"^```[a-zA-Z]*\n?", "", html_content)
+                html_content = re.sub(r"\n?```$", "", html_content)
+                
+                index_file = out_dir / "index.html"
+                index_file.write_text(html_content, encoding="utf-8")
+                
+                # Auto open in Brave browser
+                _open_file_in_browser(index_file)
+                
+                # Auto forward to Telegram
+                _send_telegram_document(index_file, caption=f"🚀 *Hermes Generated Website:* {task[:60]}")
+                
+                if player:
+                    try:
+                        player.write_log(f"HERMES: Generated index.html and opened in browser!")
+                        if notify:
+                            say_fn = getattr(player, "request_say", None)
+                            if callable(say_fn):
+                                say_fn("Rishi, landing page ready ho gayi hai. Maine ise Brave browser me open kar diya hai.")
                     except Exception:
                         pass
                 
                 try:
                     from core.cloud_sync import record_activity
-                    record_activity("image_generation", f"Image: {task[:40]}", f"Generated image and saved to Desktop/{img_file.name}", files=[img_file.name])
+                    record_activity("web_generation", f"Website: {task[:40]}", "Generated single-file 21st.dev website and opened in browser.", files=["index.html"])
                 except Exception:
                     pass
                 return
 
         # ── General Multi-Step Autonomous Mission Loop ───────────────────────
         history = [
-            f"MISSION: {task}\nDELIVERABLE TARGET: {output_format or 'Comprehensive project / deliverable'}"
+            f"MISSION: {task}\nDELIVERABLE TARGET: {output_format or 'Production code / deliverable'}"
         ]
-
-        system_prompt = """You are HERMES, an elite autonomous software engineer, UI/UX designer & agent working for AANVYA.
-You execute real-world tasks step-by-step using tools until the mission is 100% complete.
-
-CRITICAL 21ST.DEV DESIGN & VISUAL RULES:
-- When asked to build a website, ALWAYS create a SINGLE-FILE, 100% SELF-CONTAINED `index.html`.
-- NEVER USE EMPTY GRAY BOXES OR "IMAGE PLACEHOLDER" TEXT.
-- ALWAYS embed REAL, STUNNING HIGH-RESOLUTION PHOTOGRAPHY using high-quality Unsplash URLs (e.g. `https://images.unsplash.com/photo-...?auto=format&fit=crop&w=1200&q=80`) for hero banners, menu/product cards, baristas, and showcase sections.
-- AUTONOMOUS 21st.dev / ACETERNITY UI ARCHITECTURAL SELECTION:
-  Analyze the business niche and autonomously select the matching 21st.dev design archetype:
-  1. 🎨 Creative Studio / Digital Agency / Architect:
-     • Pattern: Glyph Portal & Scroll-Driven Camera. Oversized bold typography that opens/zooms into immersive full-bleed case studies on scroll, minimalist serif/sans contrast, editorial layout.
-  2. ⚡ AI SaaS / Cloud Engine / Developer Tool:
-     • Pattern: Bento Grid + 3D Spotlight Tilt. Deep slate (`#030712`), cursor-tracking radial spotlight reflections, Three.js particle starfield, `preserve-3d` cards with `translateZ(30px)` pop-out icons and live code preview terminal.
-  3. ☕ Luxury Cafe / Restaurant / Fashion / Lifestyle:
-     • Pattern: Editorial Luxury Parallax. Rich authentic Unsplash photography, warm amber/espresso glassmorphism (`backdrop-blur-xl bg-amber-950/20`), serif typography (Playfair/Plus Jakarta), interactive tabbed menus and booking modals.
-  4. 🛡️ Fintech / Cybersecurity / Quantum / Enterprise:
-     • Pattern: Cyber Grid & Radar HUD. Glowing border traces, animated metric counters, real-time node status indicators, and cryptographic trust badges.
-  5. 📈 B2B Agency / Lead Generation / High-Ticket Sales:
-     • Pattern: Conversion Bento + Infinite Marquee. Animated client logo ticker, dynamic ROI pricing calculator, interactive FAQ accordion, and floating sticky CTA dock.
-  • ABSOLUTE RULE: DO NOT use cheap spinning rainbow conic borders (`spin 3s`). All cards must have silky cursor-tracking spotlights, micro-borders (`border-white/10`), smooth spring transitions, and Lucide icons.
-- Use Tailwind CSS CDN (`<script src="https://cdn.tailwindcss.com"></script>`), Google Fonts (Outfit / Plus Jakarta Sans), and Lucide Icons (`<script src="https://unpkg.com/lucide@latest"></script>`).
-
-Available Tool Calls:
-1. BASH: <shell command> (Run python scripts, terminal commands, test code)
-2. SEARCH: <query> (Search the live web for facts, documentation, or data)
-3. WRITE_FILE: <filename> ||| <content> (Write code, markdown reports, or self-contained HTML files)
-4. IMAGE: <prompt> (Generate a photorealistic FLUX.1 image deliverable)
-5. FINISH: <summary of what you created and where it is saved>
-
-Format each turn as:
-THOUGHT: <your step-by-step reasoning>
-ACTION: <one of SEARCH, WRITE_FILE, IMAGE, or FINISH>
-
-When all deliverables are created and written, return ACTION: FINISH.
-"""
 
         deliverables = []
 
         for step in range(1, max_steps + 1):
-            prompt = system_prompt + "\n\n" + "\n".join(history) + f"\n\nTurn {step}/{max_steps}:"
+            prompt = HERMES_SYSTEM_PROMPT + "\n\n" + "\n".join(history) + f"\n\nTurn {step}/{max_steps}:"
             
             try:
-                response = gemini.call(prompt, tier=gemini.FAST, timeout_ms=30000)
-                # Safely extract text from _Reply object
+                response = gemini.call(prompt, tier=gemini.FAST, timeout_ms=35000)
                 resp_text = getattr(response, "text", None) or str(response or "").strip()
             except Exception as e:
-                resp_text = f"THOUGHT: Encountered API error {e}.\nACTION: FINISH: Mission concluded."
+                resp_text = f"THOUGHT: API error {e}.\nACTION: FINISH: Mission concluded."
 
             if "ACTION: FINISH" in resp_text or "ACTION:FINISH" in resp_text:
                 summary = resp_text.split("FINISH")[-1].strip(": \n")
@@ -282,9 +288,15 @@ When all deliverables are created and written, return ACTION: FINISH.
                         if notify:
                             say_fn = getattr(player, "request_say", None)
                             if callable(say_fn):
-                                say_fn("Rishi, Hermes has completed your mission and saved the deliverables to your desktop.")
+                                say_fn("Rishi, Hermes has completed your mission.")
                     except Exception:
                         pass
+                
+                if deliverables:
+                    primary = next((f for f in reversed(deliverables) if f.name.endswith(".html")), deliverables[-1])
+                    if primary.exists() and primary.name.endswith(".html"):
+                        _open_file_in_browser(primary)
+                    _send_telegram_document(primary, caption=f"📁 *Final Deliverable:* `{primary.name}`")
                 
                 try:
                     from core.cloud_sync import record_activity
@@ -298,7 +310,6 @@ When all deliverables are created and written, return ACTION: FINISH.
                 match = re.search(r"BASH:\s*(.+)", resp_text)
                 if match:
                     cmd = match.group(1).split("\n")[0].strip()
-                    import subprocess
                     try:
                         p = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=45, cwd=str(out_dir))
                         out = (p.stdout + "\n" + p.stderr).strip() or f"(Exit {p.returncode})"
@@ -310,19 +321,6 @@ When all deliverables are created and written, return ACTION: FINISH.
                         history.append(f"HERMES_STEP_{step}: Error executing bash: {e}")
                         continue
 
-            # Parse IMAGE action
-            if "IMAGE:" in resp_text:
-                match = re.search(r"IMAGE:\s*(.+)", resp_text)
-                if match:
-                    img_prompt = match.group(1).split("\n")[0].strip()
-                    img_path = _generate_flux_image(out_dir, img_prompt)
-                    if img_path:
-                        deliverables.append(img_path)
-                        history.append(f"HERMES_STEP_{step}: Generated image for '{img_prompt}'\nTOOL_RESULT: Saved to {img_path.name}")
-                        if player:
-                            player.write_log(f"HERMES: Rendered image for '{img_prompt[:30]}'")
-                        continue
-
             # Parse WRITE_FILE action
             if "WRITE_FILE:" in resp_text:
                 match = re.search(r"WRITE_FILE:\s*([^|\n]+)\|\|\|(.*)", resp_text, re.DOTALL)
@@ -331,65 +329,46 @@ When all deliverables are created and written, return ACTION: FINISH.
                     content = match.group(2).strip()
                     content = re.sub(r"^```[a-zA-Z]*\n?", "", content)
                     content = re.sub(r"\n?```$", "", content)
-                    res = _write_file(out_dir, fname, content)
-                    f_dest = out_dir / fname
-                    deliverables.append(f_dest)
-                    # Forward document to Telegram
-                    _send_file_to_telegram(f_dest, caption=f"📄 *Hermes Created File:* `{fname}`")
-                    history.append(f"HERMES_STEP_{step}: Wrote {fname}\nTOOL_RESULT: {res}")
+                    fpath = out_dir / fname
+                    fpath.write_text(content, encoding="utf-8")
+                    if fpath not in deliverables:
+                        deliverables.append(fpath)
+                    history.append(f"HERMES_STEP_{step}: Wrote {fname}")
                     if player:
-                        player.write_log(f"HERMES: Generated {fname}")
+                        player.write_log(f"HERMES: Created deliverable `{fname}`")
                     continue
 
-            # Parse SEARCH action
-            if "SEARCH:" in resp_text:
-                match = re.search(r"SEARCH:\s*(.+)", resp_text)
-                if match:
-                    q = match.group(1).split("\n")[0].strip()
-                    res = _web_search(q)
-                    history.append(f"HERMES_STEP_{step}: Searched '{q}'\nSEARCH_RESULTS:\n{res}")
-                    if player:
-                        player.write_log(f"HERMES: Researched '{q[:40]}'")
-                    continue
-
-            # Fallback: save as markdown report
+            # If it reached end of steps or raw output
             if step == max_steps or len(resp_text) > 200:
-                rep_name = f"Hermes_Mission_Report_{int(time.time())}.md"
-                _write_file(out_dir, rep_name, resp_text)
-                rep_file = out_dir / rep_name
-                deliverables.append(rep_file)
-                _send_file_to_telegram(rep_file, caption=f"📑 *Hermes Mission Report:* {task[:60]}")
-                history.append(f"HERMES_STEP_{step}: Saved mission report.")
+                # If output contains html code, save as index.html
+                if "<!DOCTYPE html>" in resp_text or "<html" in resp_text:
+                    clean_html = re.sub(r"^```[a-zA-Z]*\n?", "", resp_text)
+                    clean_html = re.sub(r"\n?```$", "", clean_html)
+                    idx_file = out_dir / "index.html"
+                    idx_file.write_text(clean_html, encoding="utf-8")
+                    deliverables.append(idx_file)
+                    _open_file_in_browser(idx_file)
+                else:
+                    report_file = out_dir / f"Hermes_Output_{int(time.time())}.md"
+                    report_file.write_text(resp_text, encoding="utf-8")
+                    deliverables.append(report_file)
+
+                if player:
+                    player.write_log(f"HERMES: Mission Finished.")
+                    if notify:
+                        say_fn = getattr(player, "request_say", None)
+                        if callable(say_fn):
+                            say_fn("Rishi, Hermes has finished your task and saved the files to your desktop.")
                 break
 
-        # Final notification
-        if player:
-            try:
-                player.write_log(f"HERMES: All tasks finished. Deliverables in: {out_dir}")
-                if notify:
-                    say_fn = getattr(player, "request_say", None)
-                    if callable(say_fn):
-                        say_fn("Sir, Hermes has completed the mission and created your deliverables.")
-            except Exception:
-                pass
-
-        try:
-            from core.cloud_sync import record_activity
-            record_activity("hermes_mission", f"Hermes: {task[:50]}", "Completed mission and saved deliverables", files=[p.name for p in deliverables])
-        except Exception:
-            pass
-
     except Exception as e:
-        logger.error(f"[Hermes] Mission failure: {e}")
+        logger.error(f"Hermes mission error: {e}")
         if player:
-            player.write_log(f"HERMES: Error during mission: {e}")
-
-# ── Plugin Entry Point ───────────────────────────────────────────────────────
+            player.write_log(f"HERMES ERROR: {e}")
 
 def run(parameters: dict, player=None, session_memory=None) -> str:
     """
     Dispatches Hermes Agent in a dedicated background worker thread on Laptop.
-    Returns immediate spoken confirmation.
     """
     task = parameters.get("task", "").strip()
     fmt = parameters.get("output_format", "").strip()
@@ -407,7 +386,6 @@ def run(parameters: dict, player=None, session_memory=None) -> str:
         
     notify = bool(cfg.get("notify_voice", True))
 
-    # Launch background thread
     t = threading.Thread(
         target=_run_hermes_mission,
         args=(task, fmt, player, out_dir, max_steps, notify),
