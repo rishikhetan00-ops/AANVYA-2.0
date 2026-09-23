@@ -182,20 +182,47 @@ def generate_voice_note(text: str, language: str = "en") -> Optional[Path]:
 # ── Telegram Protocol & Media Dispatch ───────────────────────────────────────
 
 def send_telegram_text(token: str, chat_id: int, text: str, parse_mode: str = "Markdown") -> None:
+    """Sends text message to Telegram, automatically sanitizing headers and splitting long messages (>3800 chars)."""
+    if not text:
+        return
+
+    # Convert markdown headers '### Title' into '*Title*' for clean Telegram rendering
+    formatted_text = re.sub(r"^#{1,6}\s*(.+)$", r"*\1*", text, flags=re.MULTILINE)
+    
+    # Split into chunks under 3800 characters if message is large
+    chunks = []
+    if len(formatted_text) <= 3800:
+        chunks = [formatted_text]
+    else:
+        # Split cleanly on paragraphs or linebreaks
+        parts = formatted_text.split("\n\n")
+        current_chunk = ""
+        for p in parts:
+            if len(current_chunk) + len(p) + 2 < 3800:
+                current_chunk += (("\n\n" if current_chunk else "") + p)
+            else:
+                if current_chunk:
+                    chunks.append(current_chunk)
+                current_chunk = p
+        if current_chunk:
+            chunks.append(current_chunk)
+
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": parse_mode,
-        "disable_web_page_preview": True
-    }
-    try:
-        r = requests.post(url, json=payload, timeout=20)
-        if r.status_code >= 400:
-            payload["parse_mode"] = ""
-            requests.post(url, json=payload, timeout=20)
-    except Exception as e:
-        logger.error(f"Failed to send telegram message: {e}")
+    for chunk in chunks:
+        payload = {
+            "chat_id": chat_id,
+            "text": chunk,
+            "parse_mode": parse_mode,
+            "disable_web_page_preview": True
+        }
+        try:
+            r = requests.post(url, json=payload, timeout=20)
+            if r.status_code >= 400:
+                # Retry with raw text without Markdown parsing if Telegram parser complained
+                payload["parse_mode"] = ""
+                requests.post(url, json=payload, timeout=20)
+        except Exception as e:
+            logger.error(f"Failed to send telegram message chunk: {e}")
 
 def send_telegram_photo(token: str, chat_id: int, photo_path: Path, caption: str = "") -> bool:
     url = f"https://api.telegram.org/bot{token}/sendPhoto"
