@@ -640,6 +640,8 @@ def run_telegram_loop():
                     add_allowed_chat(chat_id)
                     send_telegram_text(token, chat_id, f"🎉 *Phone Paired Successfully!*\nWelcome {from_user}! I am *AANVYA*, your 24/7 Cloud Assistant with FLUX.1 Image Gen, Voice Notes & 2-Way Laptop Sync.\n\nType `/help` to see all capabilities!")
                 
+                lower_text = (text or "").lower().strip()
+
                 # ── Commands ────────────────────────────────────────────────
                 if text == "/start" or text == "/help":
                     help_text = (
