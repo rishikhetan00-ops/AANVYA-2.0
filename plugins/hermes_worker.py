@@ -139,17 +139,45 @@ def _send_telegram_document(doc_path: Path, caption: str = ""):
         except Exception:
             pass
 
+def _enhance_image_prompt(raw_prompt: str) -> str:
+    enhancer_prompt = f"""You are an elite prompt engineer for FLUX.1.
+Transform this request into a hyper-detailed, photorealistic masterpiece prompt:
+
+USER PROMPT: {raw_prompt}
+
+RULES:
+- Specify camera (Hasselblad H6D-100c or 35mm film), lens (85mm f/1.4), volumetric lighting, authentic skin pores/textures, and 8k resolution.
+- Output ONLY the expanded prompt text, nothing else."""
+    try:
+        resp = gemini.call(enhancer_prompt, tier=gemini.FAST, timeout_ms=15000)
+        enhanced = getattr(resp, "text", None) or str(resp or "")
+        if enhanced and len(enhanced) > 20:
+            return re.sub(r'["`]', '', enhanced).strip()
+    except Exception:
+        pass
+    return raw_prompt
+
 def _generate_flux_image(out_dir: Path, prompt: str) -> Optional[Path]:
-    clean_p = re.sub(r"[^\w\s,-]", "", prompt).strip()
+    cinematic_prompt = _enhance_image_prompt(prompt)
+    clean_p = re.sub(r"[^\w\s,-]", "", cinematic_prompt).strip()
     encoded = requests.utils.quote(clean_p)
-    url = f"https://image.pollinations.ai/prompt/{encoded}?model=flux&width=1024&height=1024&nologo=true&seed={int(time.time())}"
+    url = f"https://image.pollinations.ai/prompt/{encoded}?model=flux&width=1024&height=1024&seed={int(time.time())}"
     
     out_file = out_dir / f"Hermes_FLUX_{int(time.time())}.jpg"
     try:
-        r = requests.get(url, timeout=40)
+        r = requests.get(url, timeout=45)
         if r.status_code == 200 and len(r.content) > 5000:
-            out_file.write_bytes(r.content)
-            _send_telegram_photo(out_file, caption=f"🎨 *Hermes FLUX Render:* {clean_p[:100]}")
+            try:
+                from PIL import Image
+                from io import BytesIO
+                img = Image.open(BytesIO(r.content))
+                w, h = img.size
+                clean_img = img.crop((0, 0, w, h - 45))
+                clean_img.save(str(out_file), quality=95)
+            except Exception:
+                out_file.write_bytes(r.content)
+
+            _send_telegram_photo(out_file, caption=f"🎨 *Hermes FLUX Render:* {prompt[:100]}")
             return out_file
     except Exception as e:
         logger.error(f"FLUX generation error: {e}")

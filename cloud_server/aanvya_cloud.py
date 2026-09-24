@@ -191,18 +191,54 @@ def call_gemini(prompt: str, system_instruction: str = AANVYA_SYSTEM_PROMPT) -> 
 
 # ── FLUX.1 Photorealistic AI Image Generator ─────────────────────────────────
 
+def enhance_image_prompt(raw_prompt: str) -> str:
+    """Uses Gemini to expand user prompts into award-winning, photorealistic cinematic prompts."""
+    enhancer_prompt = f"""You are an elite prompt engineer and master cinematographer for FLUX.1.
+Transform this simple image request into a hyper-detailed, photorealistic masterpiece prompt:
+
+USER PROMPT: {raw_prompt}
+
+RULES:
+- Specify camera (e.g. Hasselblad H6D-100c or 35mm film), lens (e.g. 85mm f/1.4), aperture, lighting (volumetric, golden hour, soft ambient), authentic physical textures (pores, fine hairs, natural reflections), and 8k resolution.
+- For people: emphasize natural skin texture, candid expression, realistic eyes, and zero plastic airbrushing.
+- For landscapes/architecture: emphasize atmospheric depth, weather, lighting, and fine surface details.
+- Output ONLY the expanded prompt text, nothing else."""
+    
+    try:
+        enhanced = call_gemini(enhancer_prompt, system_instruction="You are a master cinematic prompt engineer.")
+        if enhanced and len(enhanced) > 20 and not enhanced.startswith("⚠️"):
+            return re.sub(r'["`]', '', enhanced).strip()
+    except Exception as e:
+        logger.warning(f"Prompt enhancement fallback: {e}")
+    return raw_prompt
+
 def generate_flux_image(prompt: str, filename_prefix: str = "flux") -> Optional[Path]:
-    """Generates a photorealistic AI image using FLUX.1 engine."""
-    clean_prompt = re.sub(r"[^\w\s,-]", "", prompt).strip()
+    """Generates a high-definition photorealistic AI image, auto-removing watermarks."""
+    # 1. Enhance prompt with Gemini
+    cinematic_prompt = enhance_image_prompt(prompt)
+    logger.info(f"Enhanced Image Prompt: {cinematic_prompt[:100]}...")
+    
+    clean_prompt = re.sub(r"[^\w\s,-]", "", cinematic_prompt).strip()
     encoded = requests.utils.quote(clean_prompt)
-    url = f"https://image.pollinations.ai/prompt/{encoded}?model=flux&width=1024&height=1024&nologo=true&seed={int(time.time())}"
+    url = f"https://image.pollinations.ai/prompt/{encoded}?model=flux&width=1024&height=1024&seed={int(time.time())}"
     
     out_file = MEDIA_DIR / f"{filename_prefix}_{int(time.time())}.jpg"
     try:
-        r = requests.get(url, timeout=40)
+        r = requests.get(url, timeout=45)
         if r.status_code == 200 and len(r.content) > 5000:
-            out_file.write_bytes(r.content)
-            record_shared_activity("image_generation", f"Image: {clean_prompt[:50]}", f"Generated FLUX image for: {clean_prompt}", files=[out_file.name])
+            try:
+                from PIL import Image
+                from io import BytesIO
+                img = Image.open(BytesIO(r.content))
+                w, h = img.size
+                # Crop off bottom 45px watermark for 100% clean image
+                clean_img = img.crop((0, 0, w, h - 45))
+                clean_img.save(str(out_file), quality=95)
+            except Exception as pe:
+                logger.warning(f"PIL cropping skipped ({pe}), saving direct content")
+                out_file.write_bytes(r.content)
+                
+            record_shared_activity("image_generation", f"Image: {prompt[:50]}", f"Generated photorealistic FLUX render for: {prompt}", files=[out_file.name])
             return out_file
     except Exception as e:
         logger.error(f"FLUX image generation error: {e}")
