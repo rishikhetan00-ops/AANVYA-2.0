@@ -679,7 +679,7 @@ def run_telegram_loop():
                             send_telegram_text(token, chat_id, "⚠️ Voice synthesis failed.")
                     continue
 
-                                if text.startswith("/post ") or any(lower_text.startswith(k) for k in ["make me a post", "create a post", "make a poster", "create a poster", "design a poster", "design a flyer", "create a flyer"]):
+                if text.startswith("/post ") or any(lower_text.startswith(k) for k in ["make me a post", "create a post", "make a poster", "create a poster", "design a poster", "design a flyer", "create a flyer"]):
                     clean_req = re.sub(r"^(/post|make me a post|create a post|make a poster|create a poster|design a poster|design a flyer|create a flyer)\s*", "", text, flags=re.IGNORECASE).strip()
                     if not clean_req:
                         clean_req = text
