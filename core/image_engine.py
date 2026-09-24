@@ -12,7 +12,7 @@ def enhance_realism_prompt(raw_prompt: str) -> str:
     
     return f'Authentic cinematic 35mm raw photograph of {cleaned}, natural morning window lighting, shot on Sony A7R V with 85mm f/1.4 GM lens, natural skin texture with subtle fine pores, photorealistic, shallow depth of field, 8k resolution'
 
-def generate_flux_image(prompt: str, output_path: str, model: str = 'flux-schnell') -> Optional[str]:
+def generate_flux_image(prompt: str, output_path: str, model: str = 'flux-1.1-pro') -> Optional[str]:
     prompt = enhance_realism_prompt(prompt)
     out_p = Path(output_path).resolve()
     out_p.parent.mkdir(parents=True, exist_ok=True)

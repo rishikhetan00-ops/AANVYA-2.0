@@ -2,7 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 
-async function generate(prompt, outputPath, model = 'flux-schnell') {
+async function generate(prompt, outputPath, model = 'flux-1.1-pro') {
   try {
     const candidates = [
       path.resolve(__dirname, '../config/api_keys.json'),
@@ -70,6 +70,6 @@ async function generate(prompt, outputPath, model = 'flux-schnell') {
 const args = process.argv.slice(2);
 const prompt = args[0] || 'A realistic 35mm photograph of a coffee cup';
 const out = args[1] || 'output.jpg';
-const model = args[2] || 'flux-schnell';
+const model = args[2] || 'flux-1.1-pro';
 
 generate(prompt, out, model);
