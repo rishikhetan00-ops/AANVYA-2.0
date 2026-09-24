@@ -1,4 +1,4 @@
-const { init } = require('@heyputer/puter.js/src/init.cjs');
+// Cross-platform Puter FLUX image generator supporting Node 18+ and Node 24+
 const fs = require('fs');
 const path = require('path');
 
@@ -7,7 +7,7 @@ async function generate(prompt, outputPath, model = 'flux-schnell') {
     const candidates = [
       path.resolve(__dirname, '../config/api_keys.json'),
       path.resolve('config/api_keys.json'),
-      path.resolve('/home/ubuntu/Mark-LIV/config/api_keys.json')
+      path.resolve('/home/ubuntu/AANVYA-2.0/config/api_keys.json')
     ];
     let token = process.env.PUTER_AUTH_TOKEN;
     if (!token) {
@@ -27,6 +27,16 @@ async function generate(prompt, outputPath, model = 'flux-schnell') {
     if (!token) {
       console.error(JSON.stringify({ success: false, error: 'No puter_auth_token found' }));
       process.exit(1);
+    }
+
+    // Dynamic import to support both Node 18 CJS/ESM and Node 20+
+    let init;
+    try {
+      const mod = await import('@heyputer/puter.js/src/init.cjs');
+      init = mod.init || mod.default?.init || mod.default;
+    } catch(e) {
+      const mod = require('@heyputer/puter.js/src/init.cjs');
+      init = mod.init;
     }
 
     const puter = init(token);
