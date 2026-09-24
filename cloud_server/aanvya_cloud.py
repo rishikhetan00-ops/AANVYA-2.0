@@ -213,35 +213,16 @@ RULES:
     return raw_prompt
 
 def generate_flux_image(prompt: str, filename_prefix: str = "flux") -> Optional[Path]:
-    """Generates a high-definition photorealistic AI image, auto-removing watermarks."""
-    # 1. Enhance prompt with Gemini
-    cinematic_prompt = enhance_image_prompt(prompt)
-    logger.info(f"Enhanced Image Prompt: {cinematic_prompt[:100]}...")
-    
-    clean_prompt = re.sub(r"[^\w\s,-]", "", cinematic_prompt).strip()
-    encoded = requests.utils.quote(clean_prompt)
-    url = f"https://image.pollinations.ai/prompt/{encoded}?model=flux&width=1024&height=1024&seed={int(time.time())}"
-    
+    """Generates a high-definition photorealistic AI image using Puter FLUX (0 watermarks, true photographic quality)."""
     out_file = MEDIA_DIR / f"{filename_prefix}_{int(time.time())}.jpg"
     try:
-        r = requests.get(url, timeout=45)
-        if r.status_code == 200 and len(r.content) > 5000:
-            try:
-                from PIL import Image
-                from io import BytesIO
-                img = Image.open(BytesIO(r.content))
-                w, h = img.size
-                # Crop off bottom 45px watermark for 100% clean image
-                clean_img = img.crop((0, 0, w, h - 45))
-                clean_img.save(str(out_file), quality=95)
-            except Exception as pe:
-                logger.warning(f"PIL cropping skipped ({pe}), saving direct content")
-                out_file.write_bytes(r.content)
-                
-            record_shared_activity("image_generation", f"Image: {prompt[:50]}", f"Generated photorealistic FLUX render for: {prompt}", files=[out_file.name])
-            return out_file
+        from core.image_engine import generate_flux_image as _gen_flux
+        res = _gen_flux(prompt, str(out_file))
+        if res and Path(res).exists():
+            record_shared_activity("image_generation", f"Image: {prompt[:50]}", f"Generated photorealistic Puter FLUX render for: {prompt}", files=[out_file.name])
+            return Path(res)
     except Exception as e:
-        logger.error(f"FLUX image generation error: {e}")
+        logger.error(f"Puter FLUX image generation error: {e}")
     return None
 
 # ── Microsoft Edge-TTS Voice Audio Notes ────────────────────────────────────
