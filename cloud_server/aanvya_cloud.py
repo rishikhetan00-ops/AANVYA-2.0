@@ -46,6 +46,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger("AanvyaCloud")
 
+try:
+    from core.business_audit_engine import audit_engine
+    from core.pitch_generator import pitch_generator
+    logger.info("360 Business Audit Engine & Pitch Generator loaded successfully.")
+except Exception as e:
+    logger.error(f"Could not import business_audit_engine: {e}")
+    audit_engine = None
+    pitch_generator = None
+
 # Import Unified Memory Manager
 try:
     from memory import memory_manager
@@ -476,6 +485,61 @@ Keep it razor-sharp, realistic, high-margin, and inspiring. Focus area: {focus_a
     record_shared_activity("business_ideas", f"Ideas: {focus_area[:40]}", ideas[:1000])
     return ideas
 
+def handle_lead_pipeline_async(niche: str, city: str, chat_id: int, token: str):
+    """Audits businesses across multiple service vectors, ranks opportunities, builds top prototype, and delivers pitch."""
+    try:
+        if not audit_engine:
+            send_telegram_text(token, chat_id, "⚠️ Audit Engine module not available.")
+            return
+
+        results = audit_engine.search_and_audit_businesses(niche, city, limit=3)
+        if not results:
+            send_telegram_text(token, chat_id, f"ℹ️ No qualified businesses found for *{niche} in {city}*.")
+            return
+
+        lines = [f"🎯 *Top Audited Deal Flow: {niche} in {city}*\n"]
+        for i, res in enumerate(results, 1):
+            top = res["top_opportunity"]
+            lines.append(
+                f"*{i}. {res['name']}*\n"
+                f"• *Website:* {res.get('website') or '❌ No Active Site'}\n"
+                f"• *Winning Offer:* 🏆 `{top['service_title']}`\n"
+                f"• *Conversion Probability:* `{top['conversion_probability']}%`\n"
+                f"• *Revenue Leak:* _{top['pain_point']}_\n"
+                f"• *Recommended Prototype:* `{top['prototype_to_build']}`\n"
+            )
+        send_telegram_text(token, chat_id, "\n".join(lines))
+
+        # Build prototype and pitch for #1 top prospect
+        top_lead = results[0]
+        top_op = top_lead["top_opportunity"]
+        b_name = top_lead["name"]
+        proto_target = top_op["prototype_to_build"]
+
+        send_telegram_text(token, chat_id, f"🚀 *Hermes is now autonomously building the customized prototype for #{1}: {b_name}*...\n_Solution: {proto_target}_")
+
+        mission_task = f"Build a complete, working, self-contained single-file HTML deliverable for {b_name} ({niche} in {city}). Specifically build: {proto_target}."
+        run_hermes_mission(mission_task, chat_id, token)
+
+        if pitch_generator:
+            pitch_pkg = pitch_generator.generate_pitch_package(top_lead, demo_url="[ATTACHED_PROTOTYPE]")
+            pitch_msg = (
+                f"✉️ *Ready-to-Send High-Converting Pitch Package for {b_name}*\n\n"
+                f"📋 *Cold Email Copy:*\n"
+                f"*Subject:* `{pitch_pkg['email_subject']}`\n\n"
+                f"```\n{pitch_pkg['email_body']}\n```\n\n"
+                f"📱 *WhatsApp Short Hook:*\n"
+                f"```\n{pitch_pkg['whatsapp_pitch']}\n```\n\n"
+                f"📸 *Instagram / LinkedIn DM:*\n"
+                f"```\n{pitch_pkg['dm_pitch']}\n```"
+            )
+            send_telegram_text(token, chat_id, pitch_msg)
+            record_shared_activity("lead_deal_flow", f"Deal: {b_name[:40]}", f"360 Audit & Pitch for {b_name} ({top_op['service_title']})")
+    except Exception as err:
+        logger.error(f"Lead pipeline async error: {err}")
+        send_telegram_text(token, chat_id, f"⚠️ Lead pipeline error: {err}")
+
+
 # ── Background Cron Scheduler ────────────────────────────────────────────────
 
 def run_background_cron_loop():
@@ -609,6 +673,26 @@ def run_telegram_loop():
                             send_telegram_text(token, chat_id, "⚠️ Image generation failed. Please try again.")
                     continue
                 
+                if text.startswith("/leads") or text.startswith("/audit"):
+                    raw_q = text.replace("/leads", "").replace("/audit", "").strip()
+                    if not raw_q:
+                        send_telegram_text(token, chat_id, "ℹ️ *Usage:* `/leads <niche> in <city>`\n_Example:_ `/leads Cosmetic Dentists in Zurich` or `/leads Luxury Interior Designers in London`")
+                        continue
+
+                    if " in " in raw_q:
+                        niche_p, city_p = raw_q.split(" in ", 1)
+                    elif "," in raw_q:
+                        niche_p, city_p = raw_q.split(",", 1)
+                    else:
+                        niche_p, city_p = raw_q, "Zurich"
+
+                    niche_p = niche_p.strip().title()
+                    city_p = city_p.strip().title()
+
+                    send_telegram_text(token, chat_id, f"🔍 *Initiating 360° Business Audit & Deal Flow Pipeline...*\n• *Target Niche:* {niche_p}\n• *Target City:* {city_p}\n_Scanning businesses, auditing digital infrastructure & scoring conversion probability..._")
+                    threading.Thread(target=handle_lead_pipeline_async, args=(niche_p, city_p, chat_id, token), daemon=True).start()
+                    continue
+
                 if text == "/ideas" or text.startswith("/ideas ") or text == "/venture":
                     focus = text.replace("/ideas", "").replace("/venture", "").strip() or "AI Agency Automation & Lead Generation"
                     send_telegram_text(token, chat_id, f"💡 *Generating High-Margin Automated Business Models for Rishi...*\n_Analyzing market opportunities in: {focus}_")
