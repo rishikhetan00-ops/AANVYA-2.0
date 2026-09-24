@@ -158,29 +158,14 @@ RULES:
     return raw_prompt
 
 def _generate_flux_image(out_dir: Path, prompt: str) -> Optional[Path]:
-    cinematic_prompt = _enhance_image_prompt(prompt)
-    clean_p = re.sub(r"[^\w\s,-]", "", cinematic_prompt).strip()
-    encoded = requests.utils.quote(clean_p)
-    url = f"https://image.pollinations.ai/prompt/{encoded}?model=flux&width=1024&height=1024&seed={int(time.time())}"
-    
-    out_file = out_dir / f"Hermes_FLUX_{int(time.time())}.jpg"
     try:
-        r = requests.get(url, timeout=45)
-        if r.status_code == 200 and len(r.content) > 5000:
-            try:
-                from PIL import Image
-                from io import BytesIO
-                img = Image.open(BytesIO(r.content))
-                w, h = img.size
-                clean_img = img.crop((0, 0, w, h - 45))
-                clean_img.save(str(out_file), quality=95)
-            except Exception:
-                out_file.write_bytes(r.content)
-
-            _send_telegram_photo(out_file, caption=f"🎨 *Hermes FLUX Render:* {prompt[:100]}")
-            return out_file
+        from core.image_engine import generate_flux_image
+        out_file = out_dir / f"Hermes_FLUX_{int(time.time())}.jpg"
+        res = generate_flux_image(prompt, str(out_file))
+        if res and Path(res).exists():
+            return Path(res)
     except Exception as e:
-        logger.error(f"FLUX generation error: {e}")
+        logger.error(f"FLUX image error: {e}")
     return None
 
 def _open_file_in_browser(file_path: Path):
