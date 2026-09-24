@@ -679,6 +679,27 @@ def run_telegram_loop():
                             send_telegram_text(token, chat_id, "⚠️ Voice synthesis failed.")
                     continue
 
+                                if text.startswith("/post ") or any(lower_text.startswith(k) for k in ["make me a post", "create a post", "make a poster", "create a poster", "design a poster", "design a flyer", "create a flyer"]):
+                    clean_req = re.sub(r"^(/post|make me a post|create a post|make a poster|create a poster|design a poster|design a flyer|create a flyer)\s*", "", text, flags=re.IGNORECASE).strip()
+                    if not clean_req:
+                        clean_req = text
+                    
+                    send_telegram_text(token, chat_id, f"🎨 *Designing Complete Social Post & Flyer...*\n_{clean_req}_\n_Generating visual layout & viral social media copy..._")
+                    
+                    try:
+                        from core.post_generator import generate_full_social_post
+                        res = generate_full_social_post(clean_req, MEDIA_DIR)
+                        if res.get("success") and res.get("image_path"):
+                            caption_text = f"✨ *{res.get('headline', 'Announcement')}*\n\n{res.get('caption', '')}\n\n{res.get('hashtags', '')}"
+                            send_telegram_photo(token, chat_id, Path(res["image_path"]), caption=caption_text[:1024])
+                            record_shared_activity("social_post", f"Post: {clean_req[:40]}", res.get("caption", "")[:300], files=[Path(res["image_path"]).name])
+                        else:
+                            send_telegram_text(token, chat_id, "⚠️ Failed to generate post graphic. Retrying...")
+                    except Exception as pe:
+                        logger.error(f"Post generator error: {pe}")
+                        send_telegram_text(token, chat_id, f"⚠️ Error generating post: {pe}")
+                    continue
+
                 if text.startswith("/image "):
                     img_prompt = text.replace("/image ", "").strip()
                     if img_prompt:
